@@ -8,3 +8,15 @@ pluginManagement {
 		gradlePluginPortal()
 	}
 }
+
+dependencyResolutionManagement {
+	repositories {
+		maven {
+			name = 'Fabric'
+			url = 'https://maven.fabricmc.net/'
+		}
+		mavenCentral()
+	}
+}
+
+include("wrapper")

@@ -1,0 +1,37 @@
+plugins {
+	id 'application'
+}
+
+group = project.maven_group
+version = project.mod_version
+
+java {
+	toolchain {
+		languageVersion = JavaLanguageVersion.of(21)
+	}
+}
+
+application {
+	mainClass = 'ai.moeru.airicraft.wrapper.AiricraftWrapperMain'
+}
+
+dependencies {
+	implementation "io.modelcontextprotocol.sdk:mcp:1.1.0"
+	implementation "io.modelcontextprotocol.sdk:mcp-json-jackson3:1.1.0"
+}
+
+tasks.named('jar') {
+	manifest {
+		attributes 'Main-Class': application.mainClass.get()
+	}
+
+	duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+
+	from({
+		configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) }
+	})
+}
+
+tasks.withType(JavaCompile).configureEach {
+	options.release = 21
+}
