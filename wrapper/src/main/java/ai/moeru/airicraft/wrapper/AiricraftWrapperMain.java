@@ -95,6 +95,25 @@ public final class AiricraftWrapperMain {
 						return ok(BRIDGE_CLIENT.getWorldSnapshot(x, y, z, radius));
 					})
 				),
+				tool("minecraft_look_at",
+					"Instantly turns the player camera to face a world-space target position.",
+					objectSchema(
+						Map.of(
+							"x", numberSchema(),
+							"y", numberSchema(),
+							"z", numberSchema()
+						),
+						List.of("x", "y", "z")
+					),
+					request -> withBridge(() -> {
+						Map<String, Object> argsMap = arguments(request.arguments());
+						return ok(BRIDGE_CLIENT.lookAt(
+							requiredDouble(argsMap, "x"),
+							requiredDouble(argsMap, "y"),
+							requiredDouble(argsMap, "z")
+						));
+					})
+				),
 				tool("minecraft_highlight_block",
 					"Highlights a block in the current client world for debugging.",
 					objectSchema(
@@ -234,6 +253,10 @@ public final class AiricraftWrapperMain {
 		return Map.of("type", "integer");
 	}
 
+	private static Map<String, Object> numberSchema() {
+		return Map.of("type", "number");
+	}
+
 	private static Map<String, Object> stringSchema() {
 		return Map.of("type", "string");
 	}
@@ -253,6 +276,14 @@ public final class AiricraftWrapperMain {
 	private static Integer optionalInt(Map<String, Object> arguments, String key) {
 		Object value = arguments.get(key);
 		return value == null ? null : toInt(value);
+	}
+
+	private static double requiredDouble(Map<String, Object> arguments, String key) {
+		Object value = arguments.get(key);
+		if (value == null) {
+			throw new BridgeUnavailableException("invalid_arguments", "Missing required argument: " + key);
+		}
+		return toDouble(value);
 	}
 
 	private static int clamp(Integer value, int min, int max) {
@@ -283,6 +314,13 @@ public final class AiricraftWrapperMain {
 			return number.intValue();
 		}
 		return Integer.parseInt(String.valueOf(value));
+	}
+
+	private static double toDouble(Object value) {
+		if (value instanceof Number number) {
+			return number.doubleValue();
+		}
+		return Double.parseDouble(String.valueOf(value));
 	}
 
 	private static String asJson(Map<String, Object> payload) {

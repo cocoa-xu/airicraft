@@ -48,6 +48,7 @@ public final class ModBridgeServer {
 	private final HighlightManager highlightManager;
 	private final SingleplayerWorldService singleplayerWorldService = new SingleplayerWorldService();
 	private final SavedServerService savedServerService = new SavedServerService();
+	private final PlayerViewService playerViewService = new PlayerViewService();
 
 	private volatile HttpServer server;
 	private volatile String token;
@@ -74,6 +75,7 @@ public final class ModBridgeServer {
 			httpServer.createContext("/v1/servers/join", this::handleJoinServer);
 			httpServer.createContext("/v1/focus", exchange -> handleJson(exchange, this::createFocusResponse));
 			httpServer.createContext("/v1/world-snapshot", exchange -> handleJson(exchange, () -> createWorldSnapshotResponse(exchange)));
+			httpServer.createContext("/v1/player/look-at", this::handlePlayerLookAt);
 			httpServer.createContext("/v1/highlights", this::handleHighlights);
 			httpServer.start();
 
@@ -159,6 +161,24 @@ public final class ModBridgeServer {
 				return savedServerService.joinServer(request.serverId());
 			}
 			catch (SavedServerService.SavedServerServiceException exception) {
+				throw new BridgeUnavailableException(exception.code(), exception.getMessage());
+			}
+		});
+	}
+
+	private void handlePlayerLookAt(HttpExchange exchange) throws IOException {
+		handleJsonBody(exchange, "POST", LookAtRequest.class, request -> {
+			if (request == null) {
+				throw new BridgeUnavailableException("invalid_request", "Missing look-at payload");
+			}
+			if (!isFinite(request.x()) || !isFinite(request.y()) || !isFinite(request.z())) {
+				throw new BridgeUnavailableException("invalid_request", "x, y, and z must be finite numbers");
+			}
+
+			try {
+				return onClientThread(() -> playerViewService.lookAt(request.x(), request.y(), request.z()));
+			}
+			catch (PlayerViewService.PlayerViewException exception) {
 				throw new BridgeUnavailableException(exception.code(), exception.getMessage());
 			}
 		});
@@ -664,6 +684,10 @@ public final class ModBridgeServer {
 		throw new BridgeUnavailableException("invalid_request", "kind must be block or region");
 	}
 
+	private static boolean isFinite(Double value) {
+		return value != null && Double.isFinite(value);
+	}
+
 	private static BlockPos requiredBlockPos(Integer x, Integer y, Integer z, String fields) {
 		if (x == null || y == null || z == null) {
 			throw new BridgeUnavailableException("invalid_request", "Missing coordinates: " + fields);
@@ -692,6 +716,9 @@ public final class ModBridgeServer {
 	}
 
 	private record JoinServerRequest(String serverId) {
+	}
+
+	private record LookAtRequest(Double x, Double y, Double z) {
 	}
 
 	private static final class BridgeUnavailableException extends RuntimeException {

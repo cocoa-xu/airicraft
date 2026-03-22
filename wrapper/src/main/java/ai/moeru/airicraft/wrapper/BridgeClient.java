@@ -65,6 +65,14 @@ final class BridgeClient {
 		return send("POST", "/v1/servers/join", Map.of("serverId", serverId));
 	}
 
+	Map<String, Object> lookAt(double x, double y, double z) {
+		return send("POST", "/v1/player/look-at", Map.of(
+			"x", x,
+			"y", y,
+			"z", z
+		));
+	}
+
 	Map<String, Object> createHighlight(int x, int y, int z, String color, long durationMs) {
 		return send("POST", "/v1/highlights", Map.of(
 			"kind", "block",
