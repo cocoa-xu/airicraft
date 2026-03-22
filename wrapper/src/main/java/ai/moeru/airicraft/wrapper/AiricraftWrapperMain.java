@@ -36,6 +36,40 @@ public final class AiricraftWrapperMain {
 					objectSchema(Map.of(), List.of()),
 					request -> ok(BRIDGE_CLIENT.getStatus())
 				),
+				tool("minecraft_list_worlds",
+					"Lists available singleplayer worlds that can be joined from the current client session.",
+					objectSchema(Map.of(), List.of()),
+					request -> withBridge(() -> ok(BRIDGE_CLIENT.listWorlds()))
+				),
+				tool("minecraft_join_world",
+					"Starts joining a singleplayer world by worldId.",
+					objectSchema(
+						Map.of("worldId", stringSchema()),
+						List.of("worldId")
+					),
+					request -> withBridge(() -> {
+						Map<String, Object> argsMap = arguments(request.arguments());
+						String worldId = requiredString(argsMap, "worldId");
+						return ok(BRIDGE_CLIENT.joinWorld(worldId));
+					})
+				),
+				tool("minecraft_list_servers",
+					"Lists saved multiplayer servers that can be joined from the current client session.",
+					objectSchema(Map.of(), List.of()),
+					request -> withBridge(() -> ok(BRIDGE_CLIENT.listServers()))
+				),
+				tool("minecraft_join_server",
+					"Starts connecting to a saved multiplayer server by serverId.",
+					objectSchema(
+						Map.of("serverId", stringSchema()),
+						List.of("serverId")
+					),
+					request -> withBridge(() -> {
+						Map<String, Object> argsMap = arguments(request.arguments());
+						String serverId = requiredString(argsMap, "serverId");
+						return ok(BRIDGE_CLIENT.joinServer(serverId));
+					})
+				),
 				tool("minecraft_get_focus",
 					"Returns structured information about the block or entity the player is currently looking at.",
 					objectSchema(Map.of(), List.of()),

@@ -46,6 +46,8 @@ public final class ModBridgeServer {
 	private static final SecureRandom RANDOM = new SecureRandom();
 
 	private final HighlightManager highlightManager;
+	private final SingleplayerWorldService singleplayerWorldService = new SingleplayerWorldService();
+	private final SavedServerService savedServerService = new SavedServerService();
 
 	private volatile HttpServer server;
 	private volatile String token;
@@ -66,6 +68,10 @@ public final class ModBridgeServer {
 			httpServer.setExecutor(Executors.newCachedThreadPool());
 			token = generateToken();
 			httpServer.createContext("/v1/status", exchange -> handleJson(exchange, this::createStatusResponse));
+			httpServer.createContext("/v1/worlds", this::handleWorlds);
+			httpServer.createContext("/v1/worlds/join", this::handleJoinWorld);
+			httpServer.createContext("/v1/servers", this::handleServers);
+			httpServer.createContext("/v1/servers/join", this::handleJoinServer);
 			httpServer.createContext("/v1/focus", exchange -> handleJson(exchange, this::createFocusResponse));
 			httpServer.createContext("/v1/world-snapshot", exchange -> handleJson(exchange, () -> createWorldSnapshotResponse(exchange)));
 			httpServer.createContext("/v1/highlights", this::handleHighlights);
@@ -94,6 +100,68 @@ public final class ModBridgeServer {
 		}
 
 		BridgeDiscoveryFile.deleteIfPresent();
+	}
+
+	private void handleWorlds(HttpExchange exchange) throws IOException {
+		handleJson(exchange, () -> {
+			try {
+				var client = getClient();
+				return Map.of(
+					"available", true,
+					"sessionState", sessionState(client),
+					"worlds", singleplayerWorldService.listWorlds()
+				);
+			}
+			catch (SingleplayerWorldService.SingleplayerWorldException exception) {
+				throw new BridgeUnavailableException(exception.code(), exception.getMessage());
+			}
+		});
+	}
+
+	private void handleJoinWorld(HttpExchange exchange) throws IOException {
+		handleJsonBody(exchange, "POST", JoinWorldRequest.class, request -> {
+			if (request == null || request.worldId() == null || request.worldId().isBlank()) {
+				throw new BridgeUnavailableException("invalid_request", "Missing worldId");
+			}
+
+			try {
+				return singleplayerWorldService.joinWorld(request.worldId());
+			}
+			catch (SingleplayerWorldService.SingleplayerWorldException exception) {
+				throw new BridgeUnavailableException(exception.code(), exception.getMessage());
+			}
+		});
+	}
+
+	private void handleServers(HttpExchange exchange) throws IOException {
+		handleJson(exchange, () -> {
+			try {
+				var client = getClient();
+				return Map.of(
+					"available", true,
+					"sessionState", sessionState(client),
+					"servers", savedServerService.listServers()
+				);
+			}
+			catch (SavedServerService.SavedServerServiceException exception) {
+				throw new BridgeUnavailableException(exception.code(), exception.getMessage());
+			}
+		});
+	}
+
+	private void handleJoinServer(HttpExchange exchange) throws IOException {
+		handleJsonBody(exchange, "POST", JoinServerRequest.class, request -> {
+			if (request == null || request.serverId() == null || request.serverId().isBlank()) {
+				throw new BridgeUnavailableException("invalid_request", "Missing serverId");
+			}
+
+			try {
+				return savedServerService.joinServer(request.serverId());
+			}
+			catch (SavedServerService.SavedServerServiceException exception) {
+				throw new BridgeUnavailableException(exception.code(), exception.getMessage());
+			}
+		});
 	}
 
 	private void handleHighlights(HttpExchange exchange) throws IOException {
@@ -199,6 +267,39 @@ public final class ModBridgeServer {
 		}
 	}
 
+	private <T> void handleJsonBody(
+		HttpExchange exchange,
+		String method,
+		Class<T> requestType,
+		java.util.function.Function<T, Object> handler
+	) throws IOException {
+		if (!authorize(exchange)) {
+			writeJson(exchange, 401, Map.of("error", "unauthorized", "message", "Invalid bridge token"));
+			return;
+		}
+
+		if (!method.equalsIgnoreCase(exchange.getRequestMethod())) {
+			writeJson(exchange, 405, Map.of("error", "method_not_allowed"));
+			return;
+		}
+
+		try (var reader = new InputStreamReader(exchange.getRequestBody(), StandardCharsets.UTF_8)) {
+			T request = GSON.fromJson(reader, requestType);
+			Object response = handler.apply(request);
+			writeJson(exchange, 200, response);
+		}
+		catch (JsonSyntaxException exception) {
+			writeJson(exchange, 400, Map.of("error", "invalid_json", "message", "Malformed request payload"));
+		}
+		catch (BridgeUnavailableException exception) {
+			writeJson(exchange, 503, Map.of("error", exception.code(), "message", exception.getMessage()));
+		}
+		catch (Exception exception) {
+			Airicraft.LOGGER.warn("Bridge request failed", exception);
+			writeJson(exchange, 500, Map.of("error", "internal_error", "message", exception.getMessage()));
+		}
+	}
+
 	private Object createStatusResponse() {
 		return onClientThread(() -> createStatusSnapshot(getClient()));
 	}
@@ -257,6 +358,9 @@ public final class ModBridgeServer {
 		response.put("available", true);
 		response.put("bridgeAvailable", true);
 		response.put("worldLoaded", worldLoaded);
+		response.put("sessionState", sessionState(client));
+		response.put("currentScreen", currentScreenName(client));
+		response.put("canJoinWorldOrServer", !worldLoaded);
 
 		if (!worldLoaded) {
 			response.put("state", "world_not_loaded");
@@ -401,6 +505,17 @@ public final class ModBridgeServer {
 
 	private static boolean isChunkLoaded(World world, BlockPos pos) {
 		return world.isChunkLoaded(pos);
+	}
+
+	private static String currentScreenName(MinecraftClient client) {
+		if (client.currentScreen == null) {
+			return client.world == null ? "none" : "in_game";
+		}
+		return client.currentScreen.getClass().getSimpleName();
+	}
+
+	private static String sessionState(MinecraftClient client) {
+		return client.world != null && client.player != null ? "in_world" : "out_of_world";
 	}
 
 	private boolean authorize(HttpExchange exchange) {
@@ -571,6 +686,12 @@ public final class ModBridgeServer {
 		Long durationMs,
 		String overlayText
 	) {
+	}
+
+	private record JoinWorldRequest(String worldId) {
+	}
+
+	private record JoinServerRequest(String serverId) {
 	}
 
 	private static final class BridgeUnavailableException extends RuntimeException {

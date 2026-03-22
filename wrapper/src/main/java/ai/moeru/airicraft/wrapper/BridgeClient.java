@@ -49,6 +49,22 @@ final class BridgeClient {
 		return get(path.toString());
 	}
 
+	Map<String, Object> listWorlds() {
+		return get("/v1/worlds");
+	}
+
+	Map<String, Object> joinWorld(String worldId) {
+		return send("POST", "/v1/worlds/join", Map.of("worldId", worldId));
+	}
+
+	Map<String, Object> listServers() {
+		return get("/v1/servers");
+	}
+
+	Map<String, Object> joinServer(String serverId) {
+		return send("POST", "/v1/servers/join", Map.of("serverId", serverId));
+	}
+
 	Map<String, Object> createHighlight(int x, int y, int z, String color, long durationMs) {
 		return send("POST", "/v1/highlights", Map.of(
 			"kind", "block",
