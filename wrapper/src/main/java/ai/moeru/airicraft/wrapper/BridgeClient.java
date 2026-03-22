@@ -158,6 +158,7 @@ final class BridgeClient {
 			return payload;
 		}
 		catch (ConnectException exception) {
+			BridgeStateFile.deleteIfPresent();
 			throw new BridgeUnavailableException("minecraft_unavailable", "Minecraft bridge is not reachable");
 		}
 		catch (IOException exception) {

@@ -59,6 +59,8 @@ public final class ModBridgeServer {
 			return;
 		}
 
+		BridgeDiscoveryFile.deleteIfPresent();
+
 		try {
 			var httpServer = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
 			httpServer.setExecutor(Executors.newCachedThreadPool());

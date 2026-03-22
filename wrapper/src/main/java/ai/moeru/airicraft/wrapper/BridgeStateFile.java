@@ -43,6 +43,14 @@ final class BridgeStateFile {
 		}
 	}
 
+	static void deleteIfPresent() {
+		try {
+			Files.deleteIfExists(BRIDGE_FILE);
+		}
+		catch (IOException ignored) {
+		}
+	}
+
 	record BridgeState(int port, String token, long startedAtEpochMillis) {
 	}
 }
