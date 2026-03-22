@@ -1,5 +1,7 @@
 package ai.moeru.airicraft.wrapper;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.modelcontextprotocol.json.McpJsonMapper;
 import io.modelcontextprotocol.json.jackson3.JacksonMcpJsonMapperSupplier;
 import io.modelcontextprotocol.server.McpServer;
@@ -10,10 +12,10 @@ import io.modelcontextprotocol.spec.McpSchema;
 
 import java.util.List;
 import java.util.Map;
-import java.util.function.BiFunction;
 import java.util.function.Supplier;
 
 public final class AiricraftWrapperMain {
+	private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 	private static final BridgeClient BRIDGE_CLIENT = new BridgeClient();
 
 	private AiricraftWrapperMain() {
@@ -32,21 +34,21 @@ public final class AiricraftWrapperMain {
 				tool("minecraft_get_status",
 					"Returns whether Minecraft is reachable and whether a world is currently loaded.",
 					objectSchema(Map.of(), List.of()),
-					request -> ok(BRIDGE_CLIENT.getStatusText())
+					request -> ok(BRIDGE_CLIENT.getStatus())
 				),
 				tool("minecraft_get_focus",
-					"Returns the block or entity the player is currently looking at.",
+					"Returns structured information about the block or entity the player is currently looking at.",
 					objectSchema(Map.of(), List.of()),
 					request -> withBridge(() -> ok(BRIDGE_CLIENT.getFocus()))
 				),
 				tool("minecraft_get_world_snapshot",
-					"Returns block data around a target position. If no position is provided, the player's current block position is used.",
+					"Returns structured block data around a target position. If no position is provided, the player's current block position is used.",
 					objectSchema(
 						Map.of(
-							"x", numberSchema(),
-							"y", numberSchema(),
-							"z", numberSchema(),
-							"radius", numberSchema()
+							"x", integerSchema(),
+							"y", integerSchema(),
+							"z", integerSchema(),
+							"radius", integerSchema()
 						),
 						List.of()
 					),
@@ -63,11 +65,11 @@ public final class AiricraftWrapperMain {
 					"Highlights a block in the current client world for debugging.",
 					objectSchema(
 						Map.of(
-							"x", numberSchema(),
-							"y", numberSchema(),
-							"z", numberSchema(),
+							"x", integerSchema(),
+							"y", integerSchema(),
+							"z", integerSchema(),
 							"color", stringSchema(),
-							"durationSeconds", numberSchema()
+							"durationSeconds", integerSchema()
 						),
 						List.of("x", "y", "z")
 					),
@@ -104,12 +106,20 @@ public final class AiricraftWrapperMain {
 			.build();
 	}
 
-	private static McpSchema.CallToolResult ok(String text) {
-		return new McpSchema.CallToolResult(List.of(new McpSchema.TextContent(text)), false, null, Map.of());
+	private static McpSchema.CallToolResult ok(Map<String, Object> payload) {
+		return McpSchema.CallToolResult.builder()
+			.structuredContent(payload)
+			.addTextContent(asJson(payload))
+			.build();
 	}
 
 	private static McpSchema.CallToolResult error(String code, String message) {
-		return new McpSchema.CallToolResult(List.of(new McpSchema.TextContent(jsonError(code, message))), true, null, Map.of());
+		Map<String, Object> payload = Map.of("error", code, "message", message);
+		return McpSchema.CallToolResult.builder()
+			.isError(true)
+			.structuredContent(payload)
+			.addTextContent(asJson(payload))
+			.build();
 	}
 
 	private static McpSchema.CallToolResult withBridge(Supplier<McpSchema.CallToolResult> action) {
@@ -128,8 +138,8 @@ public final class AiricraftWrapperMain {
 		return new McpSchema.JsonSchema("object", properties, required, Boolean.FALSE, Map.of(), Map.of());
 	}
 
-	private static Map<String, Object> numberSchema() {
-		return Map.of("type", "number");
+	private static Map<String, Object> integerSchema() {
+		return Map.of("type", "integer");
 	}
 
 	private static Map<String, Object> stringSchema() {
@@ -170,12 +180,13 @@ public final class AiricraftWrapperMain {
 		return Integer.parseInt(String.valueOf(value));
 	}
 
-	private static String jsonError(String code, String message) {
-		return "{\"error\":\"" + escape(code) + "\",\"message\":\"" + escape(nonEmpty(message, "")) + "\"}";
-	}
-
-	private static String escape(String value) {
-		return value.replace("\\", "\\\\").replace("\"", "\\\"");
+	private static String asJson(Map<String, Object> payload) {
+		try {
+			return OBJECT_MAPPER.writeValueAsString(payload);
+		}
+		catch (JsonProcessingException exception) {
+			return payload.toString();
+		}
 	}
 
 	private static String nonEmpty(String value, String fallback) {

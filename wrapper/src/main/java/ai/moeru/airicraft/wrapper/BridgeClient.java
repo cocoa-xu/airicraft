@@ -1,5 +1,8 @@
 package ai.moeru.airicraft.wrapper;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import java.io.IOException;
 import java.net.ConnectException;
 import java.net.URI;
@@ -7,27 +10,37 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 final class BridgeClient {
+	private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+	private static final TypeReference<LinkedHashMap<String, Object>> MAP_TYPE = new TypeReference<>() {
+	};
+
 	private final HttpClient httpClient = HttpClient.newBuilder()
 		.connectTimeout(Duration.ofSeconds(1))
 		.build();
 
-	String getStatusText() {
+	Map<String, Object> getStatus() {
 		try {
 			return get("/v1/status");
 		}
 		catch (BridgeUnavailableException exception) {
-			return "{\"available\":false,\"worldLoaded\":false,\"state\":\"minecraft_unavailable\",\"message\":\"Minecraft bridge is not active\"}";
+			return Map.of(
+				"available", false,
+				"worldLoaded", false,
+				"state", "minecraft_unavailable",
+				"message", "Minecraft bridge is not active"
+			);
 		}
 	}
 
-	String getFocus() {
+	Map<String, Object> getFocus() {
 		return get("/v1/focus");
 	}
 
-	String getWorldSnapshot(Integer x, Integer y, Integer z, int radius) {
+	Map<String, Object> getWorldSnapshot(Integer x, Integer y, Integer z, int radius) {
 		StringBuilder path = new StringBuilder("/v1/world-snapshot?radius=").append(radius);
 		if (x != null && y != null && z != null) {
 			path.append("&x=").append(x).append("&y=").append(y).append("&z=").append(z);
@@ -35,20 +48,25 @@ final class BridgeClient {
 		return get(path.toString());
 	}
 
-	String createHighlight(int x, int y, int z, String color, long durationMs) {
-		return send("POST", "/v1/highlights", "{\"x\":" + x + ",\"y\":" + y + ",\"z\":" + z
-			+ ",\"color\":\"" + escape(color) + "\",\"durationMs\":" + durationMs + "}");
+	Map<String, Object> createHighlight(int x, int y, int z, String color, long durationMs) {
+		return send("POST", "/v1/highlights", Map.of(
+			"x", x,
+			"y", y,
+			"z", z,
+			"color", color,
+			"durationMs", durationMs
+		));
 	}
 
-	String clearHighlights() {
+	Map<String, Object> clearHighlights() {
 		return send("DELETE", "/v1/highlights", null);
 	}
 
-	private String get(String path) {
+	private Map<String, Object> get(String path) {
 		return send("GET", path, null);
 	}
 
-	private String send(String method, String path, String body) {
+	private Map<String, Object> send(String method, String path, Object body) {
 		BridgeStateFile.BridgeState state = BridgeStateFile.read()
 			.orElseThrow(() -> new BridgeUnavailableException("minecraft_unavailable", "Minecraft bridge is not active"));
 
@@ -63,16 +81,22 @@ final class BridgeClient {
 				builder.method(method, HttpRequest.BodyPublishers.noBody());
 			}
 			else {
-				builder.method(method, HttpRequest.BodyPublishers.ofString(body))
+				builder.method(method, HttpRequest.BodyPublishers.ofString(OBJECT_MAPPER.writeValueAsString(body)))
 					.header("Content-Type", "application/json");
 			}
 
 			HttpResponse<String> response = httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+			Map<String, Object> payload = response.body() == null || response.body().isBlank()
+				? new LinkedHashMap<>()
+				: OBJECT_MAPPER.readValue(response.body(), MAP_TYPE);
+
 			if (response.statusCode() >= 400) {
-				throw new BridgeUnavailableException("bridge_error", nonEmpty(response.body(), "Bridge request failed"));
+				String code = String.valueOf(payload.getOrDefault("error", "bridge_error"));
+				String message = String.valueOf(payload.getOrDefault("message", "Bridge request failed"));
+				throw new BridgeUnavailableException(code, message);
 			}
 
-			return nonEmpty(response.body(), "{}");
+			return payload;
 		}
 		catch (ConnectException exception) {
 			throw new BridgeUnavailableException("minecraft_unavailable", "Minecraft bridge is not reachable");
@@ -84,10 +108,6 @@ final class BridgeClient {
 			Thread.currentThread().interrupt();
 			throw new BridgeUnavailableException("bridge_interrupted", "Bridge request interrupted");
 		}
-	}
-
-	private static String escape(String value) {
-		return value.replace("\\", "\\\\").replace("\"", "\\\"");
 	}
 
 	private static String nonEmpty(String value, String fallback) {

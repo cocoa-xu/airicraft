@@ -9,11 +9,15 @@ import com.sun.net.httpserver.HttpServer;
 import net.minecraft.block.BlockState;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.entity.Entity;
+import net.minecraft.entity.LivingEntity;
+import net.minecraft.fluid.FluidState;
 import net.minecraft.registry.Registries;
+import net.minecraft.state.property.Property;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.hit.EntityHitResult;
 import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.World;
 
 import java.io.IOException;
@@ -112,7 +116,11 @@ public final class ModBridgeServer {
 			var highlightId = onClientThread(() -> {
 				var client = getClient();
 				ensureWorldLoaded(client);
-				return highlightManager.add(new BlockPos(request.x(), request.y(), request.z()));
+				return highlightManager.add(
+					new BlockPos(request.x(), request.y(), request.z()),
+					parseColor(request.color()),
+					safeDurationMs(request.durationMs())
+				);
 			});
 
 			writeJson(exchange, 200, Map.of("highlightId", highlightId));
@@ -165,7 +173,11 @@ public final class ModBridgeServer {
 		return onClientThread(() -> {
 			var client = getClient();
 			ensureWorldLoaded(client);
-			return Map.of("available", true, "focus", describeFocus(client));
+			return Map.of(
+				"available", true,
+				"worldLoaded", true,
+				"focus", describeFocus(client)
+			);
 		});
 	}
 
@@ -187,9 +199,15 @@ public final class ModBridgeServer {
 				center = new BlockPos(x, y, z);
 			}
 
+			if (!isChunkLoaded(client.world, center)) {
+				throw new BridgeUnavailableException("chunk_not_loaded", "Target chunk is not loaded");
+			}
+
 			return Map.of(
 				"available", true,
+				"worldLoaded", true,
 				"center", blockPos(center),
+				"chunk", Map.of("loaded", true),
 				"radius", radius,
 				"blocks", collectBlocks(client.world, center, radius)
 			);
@@ -230,11 +248,22 @@ public final class ModBridgeServer {
 			for (int y = center.getY() - radius; y <= center.getY() + radius; y++) {
 				for (int z = center.getZ() - radius; z <= center.getZ() + radius; z++) {
 					var pos = new BlockPos(x, y, z);
+					if (!isChunkLoaded(world, pos)) {
+						blocks.add(Map.of(
+							"pos", blockPos(pos),
+							"chunk", Map.of("loaded", false)
+						));
+						continue;
+					}
+
 					BlockState blockState = world.getBlockState(pos);
 					blocks.add(Map.of(
 						"pos", blockPos(pos),
-						"block", Registries.BLOCK.getId(blockState.getBlock()).toString(),
-						"state", blockState.toString()
+						"id", Registries.BLOCK.getId(blockState.getBlock()).toString(),
+						"chunk", Map.of("loaded", true),
+						"state", Map.of(
+							"properties", blockProperties(blockState)
+						)
 					));
 				}
 			}
@@ -245,40 +274,99 @@ public final class ModBridgeServer {
 	private Map<String, Object> describeFocus(MinecraftClient client) {
 		HitResult hitResult = client.crosshairTarget;
 		if (hitResult == null) {
-			return Map.of("type", "none");
+			return Map.of(
+				"type", "miss",
+				"crosshair", Map.of(
+					"hitPos", vector(client.player == null ? Vec3d.ZERO : client.player.getCameraPosVec(1.0F))
+				)
+			);
 		}
 
 		if (hitResult instanceof BlockHitResult blockHit) {
 			BlockPos pos = blockHit.getBlockPos();
-			BlockState state = Objects.requireNonNull(client.world).getBlockState(pos);
+			World world = Objects.requireNonNull(client.world);
+			if (!isChunkLoaded(world, pos)) {
+				throw new BridgeUnavailableException("chunk_not_loaded", "Target chunk is not loaded");
+			}
+
+			BlockState state = world.getBlockState(pos);
+			FluidState fluidState = state.getFluidState();
 			return Map.of(
 				"type", "block",
-				"pos", blockPos(pos),
-				"block", Registries.BLOCK.getId(state.getBlock()).toString(),
-				"side", blockHit.getSide().asString()
+				"hitPos", vector(blockHit.getPos()),
+				"block", Map.of(
+					"id", Registries.BLOCK.getId(state.getBlock()).toString(),
+					"pos", blockPos(pos),
+					"face", blockHit.getSide().asString(),
+					"state", Map.of("properties", blockProperties(state)),
+					"isAir", state.isAir(),
+					"isReplaceable", state.isReplaceable(),
+					"hasBlockEntity", state.hasBlockEntity(),
+					"light", Map.of(
+						"emitted", state.getLuminance(),
+						"local", world.getLightLevel(pos)
+					),
+					"fluid", Map.of(
+						"id", Registries.FLUID.getId(fluidState.getFluid()).toString()
+					),
+					"chunk", Map.of("loaded", true)
+				)
 			);
 		}
 
 		if (hitResult instanceof EntityHitResult entityHit) {
 			Entity entity = entityHit.getEntity();
+			Map<String, Object> entityPayload = new LinkedHashMap<>();
+			entityPayload.put("id", entity.getId());
+			entityPayload.put("uuid", entity.getUuidAsString());
+			entityPayload.put("type", Registries.ENTITY_TYPE.getId(entity.getType()).toString());
+			entityPayload.put("name", entity.getName().getString());
+			entityPayload.put("pos", Map.of(
+				"x", entity.getX(),
+				"y", entity.getY(),
+				"z", entity.getZ()
+			));
+			entityPayload.put("alive", entity.isAlive());
+			if (entity instanceof LivingEntity livingEntity) {
+				entityPayload.put("health", livingEntity.getHealth());
+				entityPayload.put("maxHealth", livingEntity.getMaxHealth());
+			}
+
 			return Map.of(
 				"type", "entity",
-				"entityType", Registries.ENTITY_TYPE.getId(entity.getType()).toString(),
-				"name", entity.getName().getString(),
-				"id", entity.getId(),
-				"pos", Map.of(
-					"x", entity.getX(),
-					"y", entity.getY(),
-					"z", entity.getZ()
-				)
+				"hitPos", vector(entityHit.getPos()),
+				"entity", entityPayload
 			);
 		}
 
-		return Map.of("type", hitResult.getType().name().toLowerCase());
+		return Map.of(
+			"type", "miss",
+			"crosshair", Map.of("hitPos", vector(hitResult.getPos()))
+		);
+	}
+
+	private static Map<String, Object> blockProperties(BlockState state) {
+		Map<String, Object> properties = new LinkedHashMap<>();
+		for (Property<?> property : state.getProperties()) {
+			properties.put(property.getName(), propertyValue(state, property));
+		}
+		return properties;
+	}
+
+	private static <T extends Comparable<T>> Object propertyValue(BlockState state, Property<T> property) {
+		return property.name(state.get(property));
 	}
 
 	private static Map<String, Integer> blockPos(BlockPos pos) {
 		return Map.of("x", pos.getX(), "y", pos.getY(), "z", pos.getZ());
+	}
+
+	private static Map<String, Double> vector(Vec3d vec) {
+		return Map.of("x", vec.x, "y", vec.y, "z", vec.z);
+	}
+
+	private static boolean isChunkLoaded(World world, BlockPos pos) {
+		return world.isChunkLoaded(pos);
 	}
 
 	private boolean authorize(HttpExchange exchange) {
@@ -367,6 +455,34 @@ public final class ModBridgeServer {
 			builder.append(String.format("%02x", current));
 		}
 		return builder.toString();
+	}
+
+	private static int parseColor(String color) {
+		if (color == null || color.isBlank()) {
+			return 0x6000FF00;
+		}
+
+		String normalized = color.startsWith("#") ? color.substring(1) : color;
+		try {
+			if (normalized.length() == 6) {
+				return (int) (0x60000000L | Long.parseLong(normalized, 16));
+			}
+			if (normalized.length() == 8) {
+				return (int) Long.parseLong(normalized, 16);
+			}
+		}
+		catch (NumberFormatException ignored) {
+		}
+
+		throw new BridgeUnavailableException("invalid_request", "Color must be a 6 or 8 digit hex value");
+	}
+
+	private static int safeDurationMs(long durationMs) {
+		if (durationMs <= 0) {
+			return 10_000;
+		}
+
+		return (int) Math.min(durationMs, Integer.MAX_VALUE);
 	}
 
 	private record HighlightRequest(
