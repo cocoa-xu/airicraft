@@ -2,6 +2,8 @@ plugins {
 	id 'application'
 }
 
+import org.gradle.jvm.application.tasks.CreateStartScripts
+
 group = project.maven_group
 version = project.mod_version
 
@@ -12,13 +14,34 @@ java {
 }
 
 application {
-	mainClass = 'ai.moeru.airicraft.wrapper.AiricraftWrapperMain'
+	mainClass = 'ai.moeru.airicraft.wrapper.AiricraftCliMain'
+	applicationName = 'airicraft'
 }
 
 dependencies {
-	implementation "io.modelcontextprotocol.sdk:mcp:1.1.0"
-	implementation "io.modelcontextprotocol.sdk:mcp-json-jackson3:1.1.0"
+	implementation "info.picocli:picocli:4.7.6"
 	implementation "com.fasterxml.jackson.core:jackson-databind:2.18.2"
+
+	testImplementation platform("org.junit:junit-bom:5.11.4")
+	testImplementation "org.junit.jupiter:junit-jupiter"
+	testRuntimeOnly "org.junit.platform:junit-platform-launcher"
+}
+
+tasks.named('test') {
+	useJUnitPlatform()
+}
+
+tasks.withType(CreateStartScripts).configureEach {
+	applicationName = 'airicraft'
+	doFirst {
+		delete outputDir
+	}
+}
+
+tasks.named('installDist') {
+	doFirst {
+		delete layout.buildDirectory.dir("install/${application.applicationName}")
+	}
 }
 
 tasks.named('jar') {

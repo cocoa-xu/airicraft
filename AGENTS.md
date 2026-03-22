@@ -6,20 +6,19 @@
 - Java target is `21`.
 - The build is a multi-project Gradle build with:
   - root project: Fabric mod
-  - `wrapper/`: standalone Java MCP wrapper over `stdio`
+  - `wrapper/`: standalone Java CLI for agent-driven control
 
 ## Build And Run
 - Full build: `./gradlew build`
 - Run Minecraft client in dev: `./gradlew runClient`
-- Wrapper entrypoint: `wrapper/src/main/java/ai/moeru/airicraft/wrapper/AiricraftWrapperMain.java`
-- Wrapper artifact is built by the `wrapper` subproject as a runnable jar.
+- CLI entrypoint: `wrapper/src/main/java/ai/moeru/airicraft/wrapper/AiricraftCliMain.java`
+- CLI artifact is built by the `wrapper` subproject as a runnable jar and application distribution.
 
 ## Architecture
-- The MCP server is not inside the mod.
-- The public MCP surface is the standalone `wrapper` process over `stdio`.
+- The public control surface is the standalone `wrapper` CLI.
 - The Fabric mod exposes an internal localhost HTTP bridge.
 - Bridge discovery is via `~/.airicraft/bridge-state.json`.
-- The wrapper reads the state file, calls the localhost bridge, and deletes stale state if the bridge is unreachable.
+- The CLI reads the state file, calls the localhost bridge, and deletes stale state if the bridge is unreachable.
 
 ## Key Mod-Side Files
 - `src/client/java/ai/moeru/airicraft/ModBridgeServer.java`
@@ -35,24 +34,44 @@
   - list and join saved multiplayer servers
 
 ## Key Wrapper Files
-- `wrapper/src/main/java/ai/moeru/airicraft/wrapper/AiricraftWrapperMain.java`
-  - MCP tool registration
-- `wrapper/src/main/java/ai/moeru/airicraft/wrapper/BridgeClient.java`
+- `wrapper/src/main/java/ai/moeru/airicraft/wrapper/AiricraftCliMain.java`
+  - CLI command tree, text output, error handling
+- `wrapper/src/main/java/ai/moeru/airicraft/wrapper/HttpBridgeTransport.java`
   - bridge HTTP client and stale-state handling
 
-## Current MCP Tools
-- `minecraft_get_status`
-- `minecraft_list_worlds`
-- `minecraft_join_world`
-- `minecraft_list_servers`
-- `minecraft_join_server`
-- `minecraft_get_focus`
-- `minecraft_get_world_snapshot`
-- `minecraft_highlight_block`
-- `minecraft_highlight_region`
-- `minecraft_list_highlights`
-- `minecraft_clear_highlight`
-- `minecraft_clear_highlights`
+## Current CLI Commands
+- `airicraft status`
+- `airicraft worlds list`
+- `airicraft worlds join --world-id <id>`
+- `airicraft servers list`
+- `airicraft servers join --server-id <id>`
+- `airicraft player focus`
+- `airicraft player look-at --x <x> --y <y> --z <z>`
+- `airicraft world snapshot [--x <x> --y <y> --z <z>] [--radius <0-4>]`
+- `airicraft highlights block --x <x> --y <y> --z <z> [--color <hex>] [--duration-seconds <1-86400>] [--overlay-text <text>]`
+- `airicraft highlights region --x1 <x> --y1 <y> --z1 <z> --x2 <x> --y2 <y> --z2 <z> [--color <hex>] [--duration-seconds <1-86400>] [--overlay-text <text>]`
+- `airicraft highlights list`
+- `airicraft highlights clear --highlight-id <id>`
+- `airicraft highlights clear-all`
+- `airicraft help [command...]`
+
+## CLI Output Contract
+- Operational commands print deterministic plain text to `stdout`.
+- Success starts with:
+  - `status: ok`
+  - `command: <command path>`
+- Failure starts with:
+  - `status: error`
+  - `command: <command path>`
+  - `error_code: <stable_code>`
+  - `message: <text>`
+- `help` and `--help` are text-only usage output.
+- Exit codes:
+  - `0` success
+  - `2` CLI parse or validation failure
+  - `3` bridge discovery or transport failure
+  - `4` bridge/domain/state failure
+  - `1` unexpected internal failure
 
 ## Current Bridge Endpoints
 - `GET /v1/status`
@@ -66,11 +85,11 @@
 
 ## Behavior Notes
 - The bridge is tied to the Minecraft client process, not world load state.
-- `minecraft_get_status` reports `sessionState`, `currentScreen`, and `canJoinWorldOrServer`.
-- World-bound read/action tools still return `world_not_loaded` when no world is active.
-- `minecraft_join_world` and `minecraft_join_server` return `already_in_world` if a world is already loaded.
-- `minecraft_list_worlds` is intended to return `already_in_world` once the client is restarted onto the latest code.
-- `minecraft_list_servers` can still safely enumerate saved servers while out of world.
+- `airicraft status` is a probe command and still exits `0` when Minecraft is unavailable, reporting `available: false`.
+- World-bound read/action commands still return `world_not_loaded` when no world is active.
+- `airicraft worlds join` and `airicraft servers join` return `already_in_world` if a world is already loaded.
+- `airicraft worlds list` is intended to return `already_in_world` once the client is restarted onto the latest code.
+- `airicraft servers list` can still safely enumerate saved servers while out of world.
 - Highlights support:
   - persistent by default
   - optional timeout
@@ -80,7 +99,7 @@
 
 ## Verified So Far
 - `./gradlew build` passes.
-- Wrapper MCP initialization works.
+- Wrapper bridge initialization and stale discovery cleanup logic work.
 - Bridge stale discovery handling works.
 - Focus, world snapshot, and highlight flows were previously tested end-to-end.
 - Out-of-world world listing and `join_world` were tested against the bridge:

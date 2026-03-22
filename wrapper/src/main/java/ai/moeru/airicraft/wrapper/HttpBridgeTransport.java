@@ -14,7 +14,9 @@ import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-final class BridgeClient {
+final class HttpBridgeTransport implements MinecraftTransport {
+	private static final Duration DEFAULT_REQUEST_TIMEOUT = Duration.ofSeconds(2);
+	private static final Duration JOIN_REQUEST_TIMEOUT = Duration.ofSeconds(15);
 	private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 	private static final TypeReference<LinkedHashMap<String, Object>> MAP_TYPE = new TypeReference<>() {
 	};
@@ -23,25 +25,30 @@ final class BridgeClient {
 		.connectTimeout(Duration.ofSeconds(1))
 		.build();
 
-	Map<String, Object> getStatus() {
+	@Override
+	public Map<String, Object> getStatus() {
 		try {
 			return get("/v1/status");
 		}
 		catch (BridgeUnavailableException exception) {
 			return Map.of(
 				"available", false,
+				"bridgeAvailable", false,
 				"worldLoaded", false,
+				"sessionState", "minecraft_unavailable",
 				"state", "minecraft_unavailable",
 				"message", "Minecraft bridge is not active"
 			);
 		}
 	}
 
-	Map<String, Object> getFocus() {
+	@Override
+	public Map<String, Object> getFocus() {
 		return get("/v1/focus");
 	}
 
-	Map<String, Object> getWorldSnapshot(Integer x, Integer y, Integer z, int radius) {
+	@Override
+	public Map<String, Object> getWorldSnapshot(Integer x, Integer y, Integer z, int radius) {
 		StringBuilder path = new StringBuilder("/v1/world-snapshot?radius=").append(radius);
 		if (x != null && y != null && z != null) {
 			path.append("&x=").append(x).append("&y=").append(y).append("&z=").append(z);
@@ -49,23 +56,28 @@ final class BridgeClient {
 		return get(path.toString());
 	}
 
-	Map<String, Object> listWorlds() {
+	@Override
+	public Map<String, Object> listWorlds() {
 		return get("/v1/worlds");
 	}
 
-	Map<String, Object> joinWorld(String worldId) {
+	@Override
+	public Map<String, Object> joinWorld(String worldId) {
 		return send("POST", "/v1/worlds/join", Map.of("worldId", worldId));
 	}
 
-	Map<String, Object> listServers() {
+	@Override
+	public Map<String, Object> listServers() {
 		return get("/v1/servers");
 	}
 
-	Map<String, Object> joinServer(String serverId) {
+	@Override
+	public Map<String, Object> joinServer(String serverId) {
 		return send("POST", "/v1/servers/join", Map.of("serverId", serverId));
 	}
 
-	Map<String, Object> lookAt(double x, double y, double z) {
+	@Override
+	public Map<String, Object> lookAt(double x, double y, double z) {
 		return send("POST", "/v1/player/look-at", Map.of(
 			"x", x,
 			"y", y,
@@ -73,18 +85,8 @@ final class BridgeClient {
 		));
 	}
 
-	Map<String, Object> createHighlight(int x, int y, int z, String color, long durationMs) {
-		return send("POST", "/v1/highlights", Map.of(
-			"kind", "block",
-			"x", x,
-			"y", y,
-			"z", z,
-			"color", color,
-			"durationMs", durationMs
-		));
-	}
-
-	Map<String, Object> createBlockHighlight(int x, int y, int z, String color, Long durationMs, String overlayText) {
+	@Override
+	public Map<String, Object> createBlockHighlight(int x, int y, int z, String color, Long durationMs, String overlayText) {
 		Map<String, Object> body = new LinkedHashMap<>();
 		body.put("kind", "block");
 		body.put("x", x);
@@ -102,7 +104,8 @@ final class BridgeClient {
 		return send("POST", "/v1/highlights", body);
 	}
 
-	Map<String, Object> createRegionHighlight(
+	@Override
+	public Map<String, Object> createRegionHighlight(
 		int x1,
 		int y1,
 		int z1,
@@ -133,15 +136,18 @@ final class BridgeClient {
 		return send("POST", "/v1/highlights", body);
 	}
 
-	Map<String, Object> listHighlights() {
+	@Override
+	public Map<String, Object> listHighlights() {
 		return get("/v1/highlights");
 	}
 
-	Map<String, Object> clearHighlight(String highlightId) {
+	@Override
+	public Map<String, Object> clearHighlight(String highlightId) {
 		return send("DELETE", "/v1/highlights?id=" + URLEncoder.encode(highlightId, java.nio.charset.StandardCharsets.UTF_8), null);
 	}
 
-	Map<String, Object> clearHighlights() {
+	@Override
+	public Map<String, Object> clearHighlights() {
 		return send("DELETE", "/v1/highlights", null);
 	}
 
@@ -155,7 +161,7 @@ final class BridgeClient {
 
 		HttpRequest.Builder builder = HttpRequest.newBuilder()
 			.uri(URI.create("http://127.0.0.1:" + state.port() + path))
-			.timeout(Duration.ofSeconds(2))
+			.timeout(requestTimeout(path))
 			.header("Authorization", "Bearer " + state.token())
 			.header("Accept", "application/json");
 
@@ -196,5 +202,12 @@ final class BridgeClient {
 
 	private static String nonEmpty(String value, String fallback) {
 		return value == null || value.isBlank() ? fallback : value;
+	}
+
+	private static Duration requestTimeout(String path) {
+		return switch (path) {
+			case "/v1/worlds/join", "/v1/servers/join" -> JOIN_REQUEST_TIMEOUT;
+			default -> DEFAULT_REQUEST_TIMEOUT;
+		};
 	}
 }

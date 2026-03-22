@@ -10,7 +10,6 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 final class BridgeStateFile {
-	private static final Path BRIDGE_FILE = Paths.get(System.getProperty("user.home"), ".airicraft", "bridge-state.json");
 	private static final Pattern PORT_PATTERN = Pattern.compile("\"port\"\\s*:\\s*(\\d+)");
 	private static final Pattern TOKEN_PATTERN = Pattern.compile("\"token\"\\s*:\\s*\"([^\"]+)\"");
 	private static final Pattern STARTED_PATTERN = Pattern.compile("\"startedAtEpochMillis\"\\s*:\\s*(\\d+)");
@@ -19,12 +18,13 @@ final class BridgeStateFile {
 	}
 
 	static Optional<BridgeState> read() {
-		if (!Files.exists(BRIDGE_FILE)) {
+		Path bridgeFile = bridgeFile();
+		if (!Files.exists(bridgeFile)) {
 			return Optional.empty();
 		}
 
 		try {
-			String raw = Files.readString(BRIDGE_FILE, StandardCharsets.UTF_8);
+			String raw = Files.readString(bridgeFile, StandardCharsets.UTF_8);
 			Matcher portMatcher = PORT_PATTERN.matcher(raw);
 			Matcher tokenMatcher = TOKEN_PATTERN.matcher(raw);
 			Matcher startedMatcher = STARTED_PATTERN.matcher(raw);
@@ -45,10 +45,14 @@ final class BridgeStateFile {
 
 	static void deleteIfPresent() {
 		try {
-			Files.deleteIfExists(BRIDGE_FILE);
+			Files.deleteIfExists(bridgeFile());
 		}
 		catch (IOException ignored) {
 		}
+	}
+
+	private static Path bridgeFile() {
+		return Paths.get(System.getProperty("user.home"), ".airicraft", "bridge-state.json");
 	}
 
 	record BridgeState(int port, String token, long startedAtEpochMillis) {
