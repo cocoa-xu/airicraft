@@ -25,10 +25,12 @@ import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -98,6 +100,12 @@ public final class ModBridgeServer {
 			return;
 		}
 
+		if ("GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+			var payload = onClientThread(() -> Map.of("highlights", highlightManager.list()));
+			writeJson(exchange, 200, payload);
+			return;
+		}
+
 		if ("POST".equalsIgnoreCase(exchange.getRequestMethod())) {
 			HighlightRequest request;
 			try (var reader = new InputStreamReader(exchange.getRequestBody(), StandardCharsets.UTF_8)) {
@@ -116,10 +124,24 @@ public final class ModBridgeServer {
 			var highlightId = onClientThread(() -> {
 				var client = getClient();
 				ensureWorldLoaded(client);
-				return highlightManager.add(
-					new BlockPos(request.x(), request.y(), request.z()),
-					parseColor(request.color()),
-					safeDurationMs(request.durationMs())
+				String kind = highlightKind(request.kind());
+				int color = parseColor(request.color());
+				Long durationMs = safeDurationMs(request.durationMs());
+				if ("region".equals(kind)) {
+					return highlightManager.addRegion(
+						requiredBlockPos(request.x1(), request.y1(), request.z1(), "x1/y1/z1"),
+						requiredBlockPos(request.x2(), request.y2(), request.z2(), "x2/y2/z2"),
+						color,
+						durationMs,
+						request.overlayText()
+					);
+				}
+
+				return highlightManager.addBlock(
+					requiredBlockPos(request.x(), request.y(), request.z(), "x/y/z"),
+					color,
+					durationMs,
+					request.overlayText()
 				);
 			});
 
@@ -128,13 +150,23 @@ public final class ModBridgeServer {
 		}
 
 		if ("DELETE".equalsIgnoreCase(exchange.getRequestMethod())) {
-			onClientThread(() -> {
+			String highlightId = getQuery(exchange, "id");
+			Map<String, Object> payload = onClientThread(() -> {
 				var client = getClient();
 				ensureWorldLoaded(client);
-				highlightManager.clear();
-				return Map.of("cleared", true);
+				if (highlightId == null || highlightId.isBlank()) {
+					int clearedCount = highlightManager.clear();
+					return Map.of("cleared", true, "clearedCount", clearedCount);
+				}
+
+				boolean cleared = highlightManager.clearById(highlightId);
+				if (!cleared) {
+					throw new BridgeUnavailableException("highlight_not_found", "Highlight not found: " + highlightId);
+				}
+
+				return Map.of("cleared", true, "highlightId", highlightId);
 			});
-			writeJson(exchange, 200, Map.of("cleared", true));
+			writeJson(exchange, 200, payload);
 			return;
 		}
 
@@ -417,24 +449,40 @@ public final class ModBridgeServer {
 	}
 
 	private static int getIntQuery(HttpExchange exchange, String key, int defaultValue) {
-		var rawQuery = exchange.getRequestURI().getRawQuery();
-		if (rawQuery == null || rawQuery.isBlank()) {
+		String value = getQuery(exchange, key);
+		if (value == null) {
 			return defaultValue;
+		}
+
+		try {
+			return Integer.parseInt(value);
+		}
+		catch (NumberFormatException ignored) {
+			return defaultValue;
+		}
+	}
+
+	private static String getQuery(HttpExchange exchange, String key) {
+		return parseQuery(exchange.getRequestURI().getRawQuery()).get(key);
+	}
+
+	private static Map<String, String> parseQuery(String rawQuery) {
+		Map<String, String> query = new HashMap<>();
+		if (rawQuery == null || rawQuery.isBlank()) {
+			return query;
 		}
 
 		for (String part : rawQuery.split("&")) {
 			var split = part.split("=", 2);
-			if (split.length == 2 && split[0].equals(key)) {
-				try {
-					return Integer.parseInt(split[1]);
-				}
-				catch (NumberFormatException ignored) {
-					return defaultValue;
-				}
+			if (split.length == 2) {
+				query.put(
+					URLDecoder.decode(split[0], StandardCharsets.UTF_8),
+					URLDecoder.decode(split[1], StandardCharsets.UTF_8)
+				);
 			}
 		}
 
-		return defaultValue;
+		return query;
 	}
 
 	private static void writeJson(HttpExchange exchange, int statusCode, Object body) throws IOException {
@@ -477,20 +525,49 @@ public final class ModBridgeServer {
 		throw new BridgeUnavailableException("invalid_request", "Color must be a 6 or 8 digit hex value");
 	}
 
-	private static int safeDurationMs(long durationMs) {
-		if (durationMs <= 0) {
-			return 10_000;
+	private static Long safeDurationMs(Long durationMs) {
+		if (durationMs == null) {
+			return null;
 		}
 
-		return (int) Math.min(durationMs, Integer.MAX_VALUE);
+		if (durationMs <= 0) {
+			throw new BridgeUnavailableException("invalid_request", "durationMs must be positive when provided");
+		}
+
+		return Math.min(durationMs, (long) Integer.MAX_VALUE);
+	}
+
+	private static String highlightKind(String kind) {
+		if (kind == null || kind.isBlank()) {
+			return "block";
+		}
+		if ("block".equals(kind) || "region".equals(kind)) {
+			return kind;
+		}
+		throw new BridgeUnavailableException("invalid_request", "kind must be block or region");
+	}
+
+	private static BlockPos requiredBlockPos(Integer x, Integer y, Integer z, String fields) {
+		if (x == null || y == null || z == null) {
+			throw new BridgeUnavailableException("invalid_request", "Missing coordinates: " + fields);
+		}
+		return new BlockPos(x, y, z);
 	}
 
 	private record HighlightRequest(
-		int x,
-		int y,
-		int z,
+		String kind,
+		Integer x,
+		Integer y,
+		Integer z,
+		Integer x1,
+		Integer y1,
+		Integer z1,
+		Integer x2,
+		Integer y2,
+		Integer z2,
 		String color,
-		long durationMs
+		Long durationMs,
+		String overlayText
 	) {
 	}
 

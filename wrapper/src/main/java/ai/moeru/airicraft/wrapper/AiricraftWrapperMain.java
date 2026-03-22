@@ -69,7 +69,8 @@ public final class AiricraftWrapperMain {
 							"y", integerSchema(),
 							"z", integerSchema(),
 							"color", stringSchema(),
-							"durationSeconds", integerSchema()
+							"durationSeconds", integerSchema(),
+							"overlayText", stringSchema()
 						),
 						List.of("x", "y", "z")
 					),
@@ -78,9 +79,66 @@ public final class AiricraftWrapperMain {
 						int x = requiredInt(argsMap, "x");
 						int y = requiredInt(argsMap, "y");
 						int z = requiredInt(argsMap, "z");
-						String color = stringValue(argsMap, "color", "00FFAA");
-						int durationSeconds = clamp(optionalInt(argsMap, "durationSeconds"), 1, 300);
-						return ok(BRIDGE_CLIENT.createHighlight(x, y, z, color, durationSeconds * 1000L));
+						String color = optionalString(argsMap, "color");
+						Integer durationSeconds = optionalInt(argsMap, "durationSeconds");
+						String overlayText = optionalString(argsMap, "overlayText");
+						return ok(BRIDGE_CLIENT.createBlockHighlight(
+							x,
+							y,
+							z,
+							color,
+							durationSeconds == null ? null : clamp(durationSeconds, 1, 86_400) * 1000L,
+							overlayText
+						));
+					})
+				),
+				tool("minecraft_highlight_region",
+					"Highlights an axis-aligned block region in the current client world for debugging.",
+					objectSchema(
+						Map.of(
+							"x1", integerSchema(),
+							"y1", integerSchema(),
+							"z1", integerSchema(),
+							"x2", integerSchema(),
+							"y2", integerSchema(),
+							"z2", integerSchema(),
+							"color", stringSchema(),
+							"durationSeconds", integerSchema(),
+							"overlayText", stringSchema()
+						),
+						List.of("x1", "y1", "z1", "x2", "y2", "z2")
+					),
+					request -> withBridge(() -> {
+						Map<String, Object> argsMap = arguments(request.arguments());
+						Integer durationSeconds = optionalInt(argsMap, "durationSeconds");
+						return ok(BRIDGE_CLIENT.createRegionHighlight(
+							requiredInt(argsMap, "x1"),
+							requiredInt(argsMap, "y1"),
+							requiredInt(argsMap, "z1"),
+							requiredInt(argsMap, "x2"),
+							requiredInt(argsMap, "y2"),
+							requiredInt(argsMap, "z2"),
+							optionalString(argsMap, "color"),
+							durationSeconds == null ? null : clamp(durationSeconds, 1, 86_400) * 1000L,
+							optionalString(argsMap, "overlayText")
+						));
+					})
+				),
+				tool("minecraft_list_highlights",
+					"Lists all active debug highlights.",
+					objectSchema(Map.of(), List.of()),
+					request -> withBridge(() -> ok(BRIDGE_CLIENT.listHighlights()))
+				),
+				tool("minecraft_clear_highlight",
+					"Clears a single debug highlight by highlightId.",
+					objectSchema(
+						Map.of("highlightId", stringSchema()),
+						List.of("highlightId")
+					),
+					request -> withBridge(() -> {
+						Map<String, Object> argsMap = arguments(request.arguments());
+						String highlightId = requiredString(argsMap, "highlightId");
+						return ok(BRIDGE_CLIENT.clearHighlight(highlightId));
 					})
 				),
 				tool("minecraft_clear_highlights",
@@ -171,6 +229,19 @@ public final class AiricraftWrapperMain {
 	private static String stringValue(Map<String, Object> arguments, String key, String defaultValue) {
 		Object value = arguments.get(key);
 		return value == null ? defaultValue : String.valueOf(value);
+	}
+
+	private static String requiredString(Map<String, Object> arguments, String key) {
+		Object value = arguments.get(key);
+		if (value == null) {
+			throw new BridgeUnavailableException("invalid_arguments", "Missing required argument: " + key);
+		}
+		return String.valueOf(value);
+	}
+
+	private static String optionalString(Map<String, Object> arguments, String key) {
+		Object value = arguments.get(key);
+		return value == null ? null : String.valueOf(value);
 	}
 
 	private static int toInt(Object value) {

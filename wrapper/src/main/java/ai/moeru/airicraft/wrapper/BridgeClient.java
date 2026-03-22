@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.net.ConnectException;
 import java.net.URI;
+import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -50,12 +51,70 @@ final class BridgeClient {
 
 	Map<String, Object> createHighlight(int x, int y, int z, String color, long durationMs) {
 		return send("POST", "/v1/highlights", Map.of(
+			"kind", "block",
 			"x", x,
 			"y", y,
 			"z", z,
 			"color", color,
 			"durationMs", durationMs
 		));
+	}
+
+	Map<String, Object> createBlockHighlight(int x, int y, int z, String color, Long durationMs, String overlayText) {
+		Map<String, Object> body = new LinkedHashMap<>();
+		body.put("kind", "block");
+		body.put("x", x);
+		body.put("y", y);
+		body.put("z", z);
+		if (color != null) {
+			body.put("color", color);
+		}
+		if (durationMs != null) {
+			body.put("durationMs", durationMs);
+		}
+		if (overlayText != null && !overlayText.isBlank()) {
+			body.put("overlayText", overlayText);
+		}
+		return send("POST", "/v1/highlights", body);
+	}
+
+	Map<String, Object> createRegionHighlight(
+		int x1,
+		int y1,
+		int z1,
+		int x2,
+		int y2,
+		int z2,
+		String color,
+		Long durationMs,
+		String overlayText
+	) {
+		Map<String, Object> body = new LinkedHashMap<>();
+		body.put("kind", "region");
+		body.put("x1", x1);
+		body.put("y1", y1);
+		body.put("z1", z1);
+		body.put("x2", x2);
+		body.put("y2", y2);
+		body.put("z2", z2);
+		if (color != null) {
+			body.put("color", color);
+		}
+		if (durationMs != null) {
+			body.put("durationMs", durationMs);
+		}
+		if (overlayText != null && !overlayText.isBlank()) {
+			body.put("overlayText", overlayText);
+		}
+		return send("POST", "/v1/highlights", body);
+	}
+
+	Map<String, Object> listHighlights() {
+		return get("/v1/highlights");
+	}
+
+	Map<String, Object> clearHighlight(String highlightId) {
+		return send("DELETE", "/v1/highlights?id=" + URLEncoder.encode(highlightId, java.nio.charset.StandardCharsets.UTF_8), null);
 	}
 
 	Map<String, Object> clearHighlights() {
