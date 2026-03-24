@@ -1,5 +1,6 @@
 package ai.moeru.airicraft;
 
+import ai.moeru.airicraft.agent.EmbodiedAgentRuntime;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonSyntaxException;
@@ -46,6 +47,7 @@ public final class ModBridgeServer {
 	private static final SecureRandom RANDOM = new SecureRandom();
 
 	private final HighlightManager highlightManager;
+	private final EmbodiedAgentRuntime agentRuntime;
 	private final SingleplayerWorldService singleplayerWorldService = new SingleplayerWorldService();
 	private final SavedServerService savedServerService = new SavedServerService();
 	private final PlayerViewService playerViewService = new PlayerViewService();
@@ -53,8 +55,9 @@ public final class ModBridgeServer {
 	private volatile HttpServer server;
 	private volatile String token;
 
-	public ModBridgeServer(HighlightManager highlightManager) {
+	public ModBridgeServer(HighlightManager highlightManager, EmbodiedAgentRuntime agentRuntime) {
 		this.highlightManager = highlightManager;
+		this.agentRuntime = agentRuntime;
 	}
 
 	public synchronized void start() {
@@ -77,6 +80,9 @@ public final class ModBridgeServer {
 			httpServer.createContext("/v1/world-snapshot", exchange -> handleJson(exchange, () -> createWorldSnapshotResponse(exchange)));
 			httpServer.createContext("/v1/player/look-at", this::handlePlayerLookAt);
 			httpServer.createContext("/v1/highlights", this::handleHighlights);
+			httpServer.createContext("/v1/agent/status", exchange -> handleJson(exchange, this::createAgentStatusResponse));
+			httpServer.createContext("/v1/verification/results", exchange -> handleJson(exchange, this::createVerificationResultsResponse));
+			httpServer.createContext("/v1/verification/run", this::handleVerificationRun);
 			httpServer.start();
 
 			server = httpServer;
@@ -263,6 +269,27 @@ public final class ModBridgeServer {
 		writeJson(exchange, 405, Map.of("error", "method_not_allowed"));
 	}
 
+	private void handleVerificationRun(HttpExchange exchange) throws IOException {
+		handleJsonBody(exchange, "POST", VerificationRunRequest.class, request -> {
+			if (request == null || request.scenario() == null || request.scenario().isBlank()) {
+				throw new BridgeUnavailableException("invalid_request", "Missing scenario");
+			}
+
+			return onClientThread(() -> {
+				boolean accepted = agentRuntime.startVerification(request.scenario());
+				if (!accepted) {
+					throw new BridgeUnavailableException("unknown_scenario", "Unknown verification scenario: " + request.scenario());
+				}
+
+				return Map.of(
+					"accepted", true,
+					"scenario", request.scenario(),
+					"running", true
+				);
+			});
+		});
+	}
+
 	private void handleJson(HttpExchange exchange, Supplier<Object> supplier) throws IOException {
 		if (!authorize(exchange)) {
 			writeJson(exchange, 401, Map.of("error", "unauthorized", "message", "Invalid bridge token"));
@@ -322,6 +349,31 @@ public final class ModBridgeServer {
 
 	private Object createStatusResponse() {
 		return onClientThread(() -> createStatusSnapshot(getClient()));
+	}
+
+	private Object createAgentStatusResponse() {
+		return onClientThread(() -> {
+			var snapshot = agentRuntime.snapshot();
+			Map<String, Object> response = new LinkedHashMap<>();
+			response.put("available", true);
+			response.put("bridgeAvailable", true);
+			response.put("agentAvailable", true);
+			response.put("initialized", snapshot.initialized());
+			response.put("tickCount", snapshot.tickCount());
+			response.put("session", snapshot.session());
+			response.put("verification", snapshot.verification());
+			return response;
+		});
+	}
+
+	private Object createVerificationResultsResponse() {
+		return onClientThread(() -> {
+			Map<String, Object> response = new LinkedHashMap<>();
+			response.put("available", true);
+			response.put("scenarios", agentRuntime.verificationScenarioNames());
+			response.put("report", agentRuntime.verificationReport());
+			return response;
+		});
 	}
 
 	private Object createFocusResponse() {
@@ -719,6 +771,9 @@ public final class ModBridgeServer {
 	}
 
 	private record LookAtRequest(Double x, Double y, Double z) {
+	}
+
+	private record VerificationRunRequest(String scenario) {
 	}
 
 	private static final class BridgeUnavailableException extends RuntimeException {

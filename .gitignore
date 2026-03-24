@@ -44,3 +44,5 @@ replay_*.log
 
 # gradle local
 .gradle-local/
+
+legacy_code_for_ref/
