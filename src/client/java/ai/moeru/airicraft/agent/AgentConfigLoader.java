@@ -2,26 +2,26 @@ package ai.moeru.airicraft.agent;
 
 import ai.moeru.airicraft.Airicraft;
 import com.google.gson.Gson;
-import com.google.gson.JsonObject;
 import com.google.gson.JsonParseException;
-import com.google.gson.JsonParser;
-import com.google.gson.stream.JsonReader;
 import net.fabricmc.loader.api.FabricLoader;
+import org.yaml.snakeyaml.Yaml;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.InputStreamReader;
 import java.io.Reader;
-import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 public final class AgentConfigLoader {
 	private static final Gson GSON = new Gson();
-	private static final String TEMPLATE_RESOURCE = "/config/airicraft/agent.json.example";
-	private static final String TEMPLATE_FILENAME = "agent.json.example";
-	private static final String CONFIG_FILENAME = "agent.json";
+	private static final Yaml YAML = new Yaml();
+	private static final String TEMPLATE_RESOURCE = "/config/airicraft/agent.yml.example";
+	private static final String TEMPLATE_FILENAME = "agent.yml.example";
+	private static final String CONFIG_FILENAME = "agent.yml";
+	private static final String LEGACY_CONFIG_FILENAME = "agent.json";
 
 	private AgentConfigLoader() {
 	}
@@ -31,16 +31,22 @@ public final class AgentConfigLoader {
 		Path configDir = FabricLoader.getInstance().getConfigDir().resolve("airicraft");
 		Path templatePath = configDir.resolve(TEMPLATE_FILENAME);
 		Path configPath = configDir.resolve(CONFIG_FILENAME);
+		Path legacyConfigPath = configDir.resolve(LEGACY_CONFIG_FILENAME);
 
 		try {
 			Files.createDirectories(configDir);
 			ensureFile(templatePath);
 			if (Files.notExists(configPath)) {
-				Files.copy(templatePath, configPath);
+				if (Files.exists(legacyConfigPath)) {
+					migrateLegacyJsonConfig(legacyConfigPath, configPath, defaults);
+				}
+				else {
+					Files.copy(templatePath, configPath);
+				}
 			}
 
 			try (Reader fileReader = Files.newBufferedReader(configPath, StandardCharsets.UTF_8)) {
-				JsonObject root = parseLenient(fileReader);
+				Map<String, Object> root = parseYaml(fileReader);
 				AgentConfig.LlmConfig llm = new AgentConfig.LlmConfig(
 					readString(root, "providerBaseUrl", defaults.llm().providerBaseUrl()),
 					readString(root, "apiKey", defaults.llm().apiKey()),
@@ -71,30 +77,65 @@ public final class AgentConfigLoader {
 		}
 	}
 
-	private static JsonObject parseLenient(Reader reader) {
-		JsonReader jsonReader = new JsonReader(reader);
-		jsonReader.setLenient(true);
-		return JsonParser.parseReader(jsonReader).getAsJsonObject();
+	@SuppressWarnings("unchecked")
+	private static Map<String, Object> parseYaml(Reader reader) {
+		Object loaded = YAML.load(reader);
+		if (loaded instanceof Map<?, ?> map) {
+			Map<String, Object> typed = new LinkedHashMap<>();
+			for (Map.Entry<?, ?> entry : map.entrySet()) {
+				typed.put(String.valueOf(entry.getKey()), entry.getValue());
+			}
+			return typed;
+		}
+		return Map.of();
 	}
 
-	private static String readString(JsonObject root, String fieldName, String fallback) {
-		if (root == null || !root.has(fieldName) || root.get(fieldName).isJsonNull()) {
-			return fallback;
+	private static void migrateLegacyJsonConfig(Path legacyConfigPath, Path yamlConfigPath, AgentConfig defaults) throws IOException {
+		String json = Files.readString(legacyConfigPath, StandardCharsets.UTF_8);
+		@SuppressWarnings("unchecked")
+		Map<String, Object> root = GSON.fromJson(json, Map.class);
+		if (root == null) {
+			Files.copy(yamlConfigPath.getParent().resolve(TEMPLATE_FILENAME), yamlConfigPath);
+			return;
 		}
-		return root.get(fieldName).getAsString();
+
+		Map<String, Object> yamlData = new LinkedHashMap<>();
+		yamlData.put("providerBaseUrl", readString(root, "providerBaseUrl", defaults.llm().providerBaseUrl()));
+		yamlData.put("apiKey", readString(root, "apiKey", defaults.llm().apiKey()));
+		yamlData.put("model", readString(root, "model", defaults.llm().model()));
+		yamlData.put("requestTimeoutMillis", readInt(root, "requestTimeoutMillis", defaults.llm().requestTimeoutMillis()));
+		yamlData.put("maxRecentConversationTurns", readInt(root, "maxRecentConversationTurns", defaults.llm().maxRecentConversationTurns()));
+		yamlData.put("enableProactiveSocialMode", readBoolean(root, "enableProactiveSocialMode", defaults.llm().enableProactiveSocialMode()));
+		Files.writeString(yamlConfigPath, YAML.dump(yamlData), StandardCharsets.UTF_8);
 	}
 
-	private static int readInt(JsonObject root, String fieldName, int fallback) {
-		if (root == null || !root.has(fieldName) || root.get(fieldName).isJsonNull()) {
+	private static String readString(Map<String, Object> root, String fieldName, String fallback) {
+		if (root == null || !root.containsKey(fieldName) || root.get(fieldName) == null) {
 			return fallback;
 		}
-		return root.get(fieldName).getAsInt();
+		String value = String.valueOf(root.get(fieldName));
+		return value == null ? fallback : value;
 	}
 
-	private static boolean readBoolean(JsonObject root, String fieldName, boolean fallback) {
-		if (root == null || !root.has(fieldName) || root.get(fieldName).isJsonNull()) {
+	private static int readInt(Map<String, Object> root, String fieldName, int fallback) {
+		if (root == null || !root.containsKey(fieldName) || root.get(fieldName) == null) {
 			return fallback;
 		}
-		return root.get(fieldName).getAsBoolean();
+		Object value = root.get(fieldName);
+		if (value instanceof Number number) {
+			return number.intValue();
+		}
+		return Integer.parseInt(String.valueOf(value));
+	}
+
+	private static boolean readBoolean(Map<String, Object> root, String fieldName, boolean fallback) {
+		if (root == null || !root.containsKey(fieldName) || root.get(fieldName) == null) {
+			return fallback;
+		}
+		Object value = root.get(fieldName);
+		if (value instanceof Boolean booleanValue) {
+			return booleanValue;
+		}
+		return Boolean.parseBoolean(String.valueOf(value));
 	}
 }
