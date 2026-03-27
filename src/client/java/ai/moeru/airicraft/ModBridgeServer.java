@@ -83,6 +83,8 @@ public final class ModBridgeServer {
 			httpServer.createContext("/v1/agent/status", exchange -> handleJson(exchange, this::createAgentStatusResponse));
 			httpServer.createContext("/v1/agent/session", exchange -> handleJson(exchange, this::createAgentSessionResponse));
 			httpServer.createContext("/v1/agent/events/recent", exchange -> handleJson(exchange, () -> createRecentAgentEventsResponse(exchange)));
+			httpServer.createContext("/v1/agent/goals", exchange -> handleJson(exchange, this::createAgentGoalsResponse));
+			httpServer.createContext("/v1/agent/tree", exchange -> handleJson(exchange, this::createAgentTreeResponse));
 			httpServer.createContext("/v1/verification/results", exchange -> handleJson(exchange, this::createVerificationResultsResponse));
 			httpServer.createContext("/v1/verification/run", this::handleVerificationRun);
 			httpServer.start();
@@ -403,6 +405,25 @@ public final class ModBridgeServer {
 			response.put("latestSeqNo", result.latestSeqNo());
 			response.put("truncated", result.truncated());
 			response.put("events", result.events());
+			return response;
+		});
+	}
+
+	private Object createAgentGoalsResponse() {
+		return onClientThread(() -> {
+			Map<String, Object> response = new LinkedHashMap<>();
+			response.put("available", true);
+			response.put("activeGoal", agentRuntime.activeGoal().orElse(null));
+			response.put("lastDialogueResponse", agentRuntime.lastDialogueResponse().orElse(null));
+			return response;
+		});
+	}
+
+	private Object createAgentTreeResponse() {
+		return onClientThread(() -> {
+			Map<String, Object> response = new LinkedHashMap<>();
+			response.put("available", true);
+			response.put("tree", agentRuntime.behaviorTreeSnapshot());
 			return response;
 		});
 	}
