@@ -81,6 +81,8 @@ public final class ModBridgeServer {
 			httpServer.createContext("/v1/player/look-at", this::handlePlayerLookAt);
 			httpServer.createContext("/v1/highlights", this::handleHighlights);
 			httpServer.createContext("/v1/agent/status", exchange -> handleJson(exchange, this::createAgentStatusResponse));
+			httpServer.createContext("/v1/agent/session", exchange -> handleJson(exchange, this::createAgentSessionResponse));
+			httpServer.createContext("/v1/agent/events/recent", exchange -> handleJson(exchange, () -> createRecentAgentEventsResponse(exchange)));
 			httpServer.createContext("/v1/verification/results", exchange -> handleJson(exchange, this::createVerificationResultsResponse));
 			httpServer.createContext("/v1/verification/run", this::handleVerificationRun);
 			httpServer.start();
@@ -376,6 +378,35 @@ public final class ModBridgeServer {
 		});
 	}
 
+	private Object createAgentSessionResponse() {
+		return onClientThread(() -> {
+			Map<String, Object> response = new LinkedHashMap<>();
+			response.put("available", true);
+			response.put("session", agentRuntime.sessionSnapshot());
+			response.put("lanPublished", agentRuntime.sessionSnapshot().lanPublished());
+			response.put("lanPort", agentRuntime.sessionSnapshot().lanPort());
+			response.put("primaryInteractionPlayer", agentRuntime.primaryInteractionPlayer().orElse(null));
+			response.put("nearbyPlayers", agentRuntime.nearbyPlayers());
+			return response;
+		});
+	}
+
+	private Object createRecentAgentEventsResponse(HttpExchange exchange) {
+		long defaultSince = Long.MIN_VALUE;
+		long since = getLongQuery(exchange, "since", defaultSince);
+		Long sinceSeqNo = since == defaultSince ? null : since;
+		return onClientThread(() -> {
+			var result = agentRuntime.recentEvents(sinceSeqNo);
+			Map<String, Object> response = new LinkedHashMap<>();
+			response.put("available", true);
+			response.put("oldestSeqNo", result.oldestSeqNo());
+			response.put("latestSeqNo", result.latestSeqNo());
+			response.put("truncated", result.truncated());
+			response.put("events", result.events());
+			return response;
+		});
+	}
+
 	private Object createFocusResponse() {
 		return onClientThread(() -> {
 			var client = getClient();
@@ -648,6 +679,20 @@ public final class ModBridgeServer {
 		}
 		catch (NumberFormatException ignored) {
 			return defaultValue;
+		}
+	}
+
+	private static long getLongQuery(HttpExchange exchange, String key, long defaultValue) {
+		String raw = getQuery(exchange, key);
+		if (raw == null || raw.isBlank()) {
+			return defaultValue;
+		}
+
+		try {
+			return Long.parseLong(raw);
+		}
+		catch (NumberFormatException exception) {
+			throw new BridgeUnavailableException("invalid_request", "Query parameter " + key + " must be an integer");
 		}
 	}
 

@@ -13,17 +13,20 @@ public final class SessionVerification extends VerificationScenario {
 	private final Runnable joinWorldAction;
 	private final Runnable leaveWorldAction;
 	private final BooleanSupplier worldLoadedEventSeen;
+	private final BooleanSupplier worldReadyToLeave;
 
 	public SessionVerification(
 		Supplier<SessionMode> sessionModeSupplier,
 		Runnable joinWorldAction,
 		Runnable leaveWorldAction,
-		BooleanSupplier worldLoadedEventSeen
+		BooleanSupplier worldLoadedEventSeen,
+		BooleanSupplier worldReadyToLeave
 	) {
 		this.sessionModeSupplier = Objects.requireNonNull(sessionModeSupplier, "sessionModeSupplier");
 		this.joinWorldAction = Objects.requireNonNull(joinWorldAction, "joinWorldAction");
 		this.leaveWorldAction = Objects.requireNonNull(leaveWorldAction, "leaveWorldAction");
 		this.worldLoadedEventSeen = Objects.requireNonNull(worldLoadedEventSeen, "worldLoadedEventSeen");
+		this.worldReadyToLeave = Objects.requireNonNull(worldReadyToLeave, "worldReadyToLeave");
 	}
 
 	@Override
@@ -38,6 +41,7 @@ public final class SessionVerification extends VerificationScenario {
 			.action("join world", joinWorldAction)
 			.waitUntil("world loaded", 300, () -> sessionModeSupplier.get() == SessionMode.SINGLEPLAYER_LOCAL)
 			.assertThat("world loaded event seen", worldLoadedEventSeen)
+			.waitUntil("world settled", 40, worldReadyToLeave)
 			.action("leave world", leaveWorldAction)
 			.waitUntil("returned to menu", 300, () -> sessionModeSupplier.get() == SessionMode.OUT_OF_WORLD);
 	}

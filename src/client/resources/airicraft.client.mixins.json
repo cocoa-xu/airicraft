@@ -3,7 +3,7 @@
 	"package": "ai.moeru.airicraft.mixin.client",
 	"compatibilityLevel": "JAVA_21",
 	"client": [
-		"ExampleClientMixin"
+		"MessageHandlerMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1

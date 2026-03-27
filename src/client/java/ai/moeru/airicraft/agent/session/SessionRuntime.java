@@ -1,0 +1,103 @@
+package ai.moeru.airicraft.agent.session;
+
+import ai.moeru.airicraft.agent.events.SemanticEventBuffer;
+import net.minecraft.client.MinecraftClient;
+import net.minecraft.server.integrated.IntegratedServer;
+
+import java.util.Map;
+
+public final class SessionRuntime {
+	private SessionSnapshot snapshot = SessionSnapshot.initial();
+
+	public void onClientStarted(MinecraftClient client, long tick, SemanticEventBuffer eventBuffer) {
+		snapshot = deriveSnapshot(client, tick);
+		if (!snapshot.clientBooted()) {
+			snapshot = snapshot.withClientBooted(true);
+		}
+	}
+
+	public SessionSnapshot poll(MinecraftClient client, long tick, SemanticEventBuffer eventBuffer) {
+		SessionSnapshot nextSnapshot = deriveSnapshot(client, tick).withClientBooted(true);
+		emitTransitions(snapshot, nextSnapshot, tick, eventBuffer);
+		snapshot = nextSnapshot;
+		return snapshot;
+	}
+
+	public void onWorldLeave(long tick, SemanticEventBuffer eventBuffer) {
+		if (snapshot.worldLoaded()) {
+			if (snapshot.mode() == SessionMode.REMOTE_MULTIPLAYER) {
+				eventBuffer.append(tick, "session.connection_lost", Map.of(
+					"mode", snapshot.mode().name()
+				));
+			}
+			eventBuffer.append(tick, "session.world_unloaded", Map.of(
+				"mode", snapshot.mode().name()
+			));
+		}
+
+		snapshot = snapshot
+			.withWorldLoaded(false)
+			.withMode(SessionMode.OUT_OF_WORLD)
+			.withDimensionId(null)
+			.withLanPublished(false)
+			.withLanPort(0)
+			.withTickCount(tick);
+	}
+
+	public SessionSnapshot snapshot() {
+		return snapshot;
+	}
+
+	private static SessionSnapshot deriveSnapshot(MinecraftClient client, long tick) {
+		if (client == null) {
+			return SessionSnapshot.initial().withTickCount(tick);
+		}
+
+		boolean worldLoaded = client.world != null && client.player != null;
+		String dimensionId = worldLoaded ? String.valueOf(client.world.getRegistryKey().getValue()) : null;
+		IntegratedServer server = client.getServer();
+		int lanPort = worldLoaded && server != null ? server.getServerPort() : 0;
+		boolean lanPublished = worldLoaded && client.isInSingleplayer() && lanPort > 0;
+		SessionMode mode;
+		if (!worldLoaded) {
+			mode = SessionMode.OUT_OF_WORLD;
+		}
+		else if (!client.isInSingleplayer() || client.getCurrentServerEntry() != null) {
+			mode = SessionMode.REMOTE_MULTIPLAYER;
+		}
+		else if (lanPublished) {
+			mode = SessionMode.SINGLEPLAYER_LAN_HOST;
+		}
+		else {
+			mode = SessionMode.SINGLEPLAYER_LOCAL;
+		}
+
+		return new SessionSnapshot(mode, true, worldLoaded, dimensionId, lanPublished, lanPort, tick);
+	}
+
+	private static void emitTransitions(
+		SessionSnapshot previousSnapshot,
+		SessionSnapshot nextSnapshot,
+		long tick,
+		SemanticEventBuffer eventBuffer
+	) {
+		if (!previousSnapshot.worldLoaded() && nextSnapshot.worldLoaded()) {
+			eventBuffer.append(tick, "session.world_loaded", Map.of(
+				"mode", nextSnapshot.mode().name(),
+				"dimensionId", nextSnapshot.dimensionId()
+			));
+		}
+
+		if (previousSnapshot.worldLoaded() && !nextSnapshot.worldLoaded()) {
+			eventBuffer.append(tick, "session.world_unloaded", Map.of(
+				"mode", previousSnapshot.mode().name()
+			));
+		}
+
+		if (!previousSnapshot.lanPublished() && nextSnapshot.lanPublished()) {
+			eventBuffer.append(tick, "session.lan_opened", Map.of(
+				"port", nextSnapshot.lanPort()
+			));
+		}
+	}
+}

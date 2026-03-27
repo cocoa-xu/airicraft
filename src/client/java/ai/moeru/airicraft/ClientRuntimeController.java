@@ -13,6 +13,10 @@ public final class ClientRuntimeController {
 		return highlightManager;
 	}
 
+	public EmbodiedAgentRuntime agentRuntime() {
+		return agentRuntime;
+	}
+
 	public void onClientStarted(MinecraftClient client) {
 		agentRuntime.onClientStarted(client);
 		bridgeServer.start();
@@ -26,6 +30,10 @@ public final class ClientRuntimeController {
 	public void onClientTick(MinecraftClient client) {
 		agentRuntime.onClientTick(client);
 		highlightManager.tick();
+	}
+
+	public void onChatReceived(String senderName, String plainTextMessage) {
+		agentRuntime.onChatReceived(senderName, plainTextMessage);
 	}
 
 	public void onWorldRender(WorldRenderContext context) {

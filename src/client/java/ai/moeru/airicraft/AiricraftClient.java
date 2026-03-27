@@ -9,6 +9,10 @@ import net.fabricmc.fabric.api.client.rendering.v1.world.WorldRenderEvents;
 public class AiricraftClient implements ClientModInitializer {
 	private static final ClientRuntimeController RUNTIME_CONTROLLER = new ClientRuntimeController();
 
+	public static ClientRuntimeController runtimeController() {
+		return RUNTIME_CONTROLLER;
+	}
+
 	@Override
 	public void onInitializeClient() {
 		ClientLifecycleEvents.CLIENT_STARTED.register(RUNTIME_CONTROLLER::onClientStarted);
