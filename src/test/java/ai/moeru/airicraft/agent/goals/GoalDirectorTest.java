@@ -1,7 +1,8 @@
 package ai.moeru.airicraft.agent.goals;
 
+import ai.moeru.airicraft.agent.dialogue.DialogueIntent;
 import ai.moeru.airicraft.agent.dialogue.DialogueIntentType;
-import ai.moeru.airicraft.agent.dialogue.DialogueRuntime;
+import ai.moeru.airicraft.agent.dialogue.DialogueResponse;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -9,39 +10,48 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class GoalDirectorTest {
 	@Test
-	void addressedFollowRequestCreatesFollowGoalAndDialogueResponse() {
+	void plannerSetGoalCreatesFollowGoal() {
 		GoalDirector goalDirector = new GoalDirector();
-		DialogueRuntime dialogueRuntime = new DialogueRuntime();
 
-		goalDirector.onAddressedChat("Alice", "@agent follow me", 42L, dialogueRuntime);
+		goalDirector.onPlannerResponse(new DialogueResponse(
+			"Following Alice.",
+			new DialogueIntent(DialogueIntentType.SET_GOAL, GoalType.FOLLOW_PLAYER, "Alice"),
+			42L
+		));
 
 		GoalSnapshot goal = goalDirector.activeGoal().orElseThrow();
 		assertEquals(GoalType.FOLLOW_PLAYER, goal.type());
 		assertEquals("Alice", goal.targetPlayer());
-		assertEquals(DialogueIntentType.SET_GOAL, dialogueRuntime.lastResponse().orElseThrow().intent().type());
 	}
 
 	@Test
-	void unrelatedChatDoesNotCreateGoal() {
+	void nonGoalIntentDoesNotCreateGoal() {
 		GoalDirector goalDirector = new GoalDirector();
-		DialogueRuntime dialogueRuntime = new DialogueRuntime();
 
-		goalDirector.onAddressedChat("Alice", "hello there", 42L, dialogueRuntime);
+		goalDirector.onPlannerResponse(new DialogueResponse(
+			"Hello there.",
+			new DialogueIntent(DialogueIntentType.REPLY_ONLY, null, null),
+			42L
+		));
 
 		assertTrue(goalDirector.activeGoal().isEmpty());
-		assertTrue(dialogueRuntime.lastResponse().isEmpty());
 	}
 
 	@Test
-	void clearFollowGoalOnlyClearsMatchingTarget() {
+	void clearIntentRemovesActiveGoal() {
 		GoalDirector goalDirector = new GoalDirector();
-		DialogueRuntime dialogueRuntime = new DialogueRuntime();
-		goalDirector.onAddressedChat("Alice", "@agent follow me", 42L, dialogueRuntime);
+		goalDirector.onPlannerResponse(new DialogueResponse(
+			"Following Alice.",
+			new DialogueIntent(DialogueIntentType.SET_GOAL, GoalType.FOLLOW_PLAYER, "Alice"),
+			42L
+		));
 
-		goalDirector.clearFollowGoal("Bob");
-		assertEquals("Alice", goalDirector.activeGoal().orElseThrow().targetPlayer());
+		goalDirector.onPlannerResponse(new DialogueResponse(
+			"Stopping.",
+			new DialogueIntent(DialogueIntentType.CLEAR_GOAL, null, null),
+			50L
+		));
 
-		goalDirector.clearFollowGoal("Alice");
 		assertTrue(goalDirector.activeGoal().isEmpty());
 	}
 }

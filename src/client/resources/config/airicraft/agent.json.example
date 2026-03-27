@@ -1,0 +1,19 @@
+{
+  // OpenAI-compatible base URL, for example: https://api.openai.com/v1
+  "providerBaseUrl": "https://api.openai.com/v1",
+
+  // Fill in a real API key to enable live planner requests.
+  "apiKey": "",
+
+  // Model name exposed by the configured provider.
+  "model": "",
+
+  // Planner request timeout in milliseconds.
+  "requestTimeoutMillis": 15000,
+
+  // Number of recent dialogue turns retained in planner context.
+  "maxRecentConversationTurns": 8,
+
+  // Reserved for future proactive behavior.
+  "enableProactiveSocialMode": false
+}

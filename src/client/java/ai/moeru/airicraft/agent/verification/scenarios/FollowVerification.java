@@ -11,6 +11,7 @@ import java.util.function.Supplier;
 
 public final class FollowVerification extends VerificationScenario {
 	private final BooleanSupplier worldLoaded;
+	private final Runnable setupMockPlannerResponse;
 	private final Runnable injectNearbyPlayer;
 	private final Runnable injectFollowRequest;
 	private final Supplier<Boolean> dialogueResponseAvailable;
@@ -24,6 +25,7 @@ public final class FollowVerification extends VerificationScenario {
 
 	public FollowVerification(
 		BooleanSupplier worldLoaded,
+		Runnable setupMockPlannerResponse,
 		Runnable injectNearbyPlayer,
 		Runnable injectFollowRequest,
 		Supplier<Boolean> dialogueResponseAvailable,
@@ -36,6 +38,7 @@ public final class FollowVerification extends VerificationScenario {
 		BooleanSupplier targetLostSeen
 	) {
 		this.worldLoaded = Objects.requireNonNull(worldLoaded, "worldLoaded");
+		this.setupMockPlannerResponse = Objects.requireNonNull(setupMockPlannerResponse, "setupMockPlannerResponse");
 		this.injectNearbyPlayer = Objects.requireNonNull(injectNearbyPlayer, "injectNearbyPlayer");
 		this.injectFollowRequest = Objects.requireNonNull(injectFollowRequest, "injectFollowRequest");
 		this.dialogueResponseAvailable = Objects.requireNonNull(dialogueResponseAvailable, "dialogueResponseAvailable");
@@ -57,6 +60,7 @@ public final class FollowVerification extends VerificationScenario {
 	protected void define(ScenarioBuilder builder) {
 		builder
 			.require("in world", worldLoaded)
+			.action("setup mock planner response", setupMockPlannerResponse)
 			.action("inject nearby player", injectNearbyPlayer)
 			.action("inject follow request", injectFollowRequest)
 			.waitUntil("dialogue response available", 300, dialogueResponseAvailable::get)

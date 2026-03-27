@@ -2,11 +2,13 @@ package ai.moeru.airicraft.agent.behavior;
 
 import ai.moeru.airicraft.agent.control.LookController;
 import ai.moeru.airicraft.agent.control.MovementController;
+import ai.moeru.airicraft.agent.dialogue.DialogueResponse;
 import ai.moeru.airicraft.agent.follow.FollowState;
 import ai.moeru.airicraft.agent.goals.GoalSnapshot;
 import ai.moeru.airicraft.agent.goals.GoalType;
 import ai.moeru.airicraft.agent.session.SessionSnapshot;
 import ai.moeru.airicraft.agent.dialogue.DialogueRuntime;
+import ai.moeru.airicraft.agent.speech.SpeechService;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.util.math.Vec3d;
 
@@ -27,6 +29,7 @@ public final class BehaviorTreeRuntime {
 		MinecraftClient client,
 		SessionSnapshot sessionSnapshot,
 		DialogueRuntime dialogueRuntime,
+		SpeechService speechService,
 		Optional<GoalSnapshot> activeGoal,
 		FollowState followState,
 		long tick
@@ -39,7 +42,10 @@ public final class BehaviorTreeRuntime {
 
 		if (dialogueRuntime.hasPendingReply()) {
 			movementController.stop(client);
-			dialogueRuntime.markReplyObserved();
+			dialogueRuntime.lastResponse()
+				.map(DialogueResponse::text)
+				.filter(text -> speechService.speak(client, text, tick))
+				.ifPresent(ignored -> dialogueRuntime.markReplyObserved());
 			snapshot = new BehaviorTreeSnapshot(NodeStatus.RUNNING, List.of("Root", "ReplyToPlayer"), movementController.snapshot());
 			return;
 		}

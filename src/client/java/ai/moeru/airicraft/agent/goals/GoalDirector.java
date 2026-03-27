@@ -1,37 +1,23 @@
 package ai.moeru.airicraft.agent.goals;
 
-import ai.moeru.airicraft.agent.dialogue.DialogueIntent;
-import ai.moeru.airicraft.agent.dialogue.DialogueIntentType;
 import ai.moeru.airicraft.agent.dialogue.DialogueResponse;
-import ai.moeru.airicraft.agent.dialogue.DialogueRuntime;
 
-import java.util.Locale;
 import java.util.Optional;
 
 public final class GoalDirector {
 	private GoalSnapshot activeGoal;
 
-	public void onAddressedChat(String senderName, String plainTextMessage, long tick, DialogueRuntime dialogueRuntime) {
-		if (senderName == null || plainTextMessage == null || dialogueRuntime == null) {
+	public void onPlannerResponse(DialogueResponse response) {
+		if (response == null || response.intent() == null || response.intent().type() == null) {
 			return;
 		}
 
-		String normalized = plainTextMessage.stripLeading();
-		if (!normalized.regionMatches(true, 0, "@agent", 0, "@agent".length())) {
-			return;
+		switch (response.intent().type()) {
+			case SET_GOAL -> applySetGoal(response);
+			case CLEAR_GOAL -> activeGoal = null;
+			default -> {
+			}
 		}
-
-		String command = normalized.substring("@agent".length()).trim().toLowerCase(Locale.ROOT);
-		if (!command.startsWith("follow")) {
-			return;
-		}
-
-		activeGoal = new GoalSnapshot(GoalType.FOLLOW_PLAYER, senderName, tick, "addressed_chat");
-		dialogueRuntime.recordResponse(new DialogueResponse(
-			"Following " + senderName + ".",
-			new DialogueIntent(DialogueIntentType.SET_GOAL, GoalType.FOLLOW_PLAYER, senderName),
-			tick
-		));
 	}
 
 	public Optional<GoalSnapshot> activeGoal() {
@@ -50,5 +36,17 @@ public final class GoalDirector {
 
 	public void clear() {
 		activeGoal = null;
+	}
+
+	private void applySetGoal(DialogueResponse response) {
+		if (response.intent().goalType() == null || response.intent().targetPlayer() == null || response.intent().targetPlayer().isBlank()) {
+			return;
+		}
+		activeGoal = new GoalSnapshot(
+			response.intent().goalType(),
+			response.intent().targetPlayer(),
+			response.tick(),
+			"planner_response"
+		);
 	}
 }

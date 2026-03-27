@@ -1,6 +1,7 @@
 package ai.moeru.airicraft;
 
 import ai.moeru.airicraft.agent.EmbodiedAgentRuntime;
+import ai.moeru.airicraft.agent.session.LanHostingService;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonSyntaxException;
@@ -82,9 +83,11 @@ public final class ModBridgeServer {
 			httpServer.createContext("/v1/highlights", this::handleHighlights);
 			httpServer.createContext("/v1/agent/status", exchange -> handleJson(exchange, this::createAgentStatusResponse));
 			httpServer.createContext("/v1/agent/session", exchange -> handleJson(exchange, this::createAgentSessionResponse));
+			httpServer.createContext("/v1/agent/session/open-lan", this::handleAgentOpenLan);
 			httpServer.createContext("/v1/agent/events/recent", exchange -> handleJson(exchange, () -> createRecentAgentEventsResponse(exchange)));
 			httpServer.createContext("/v1/agent/goals", exchange -> handleJson(exchange, this::createAgentGoalsResponse));
 			httpServer.createContext("/v1/agent/tree", exchange -> handleJson(exchange, this::createAgentTreeResponse));
+			httpServer.createContext("/v1/agent/dialogue", exchange -> handleJson(exchange, this::createAgentDialogueResponse));
 			httpServer.createContext("/v1/verification/results", exchange -> handleJson(exchange, this::createVerificationResultsResponse));
 			httpServer.createContext("/v1/verification/run", this::handleVerificationRun);
 			httpServer.start();
@@ -294,6 +297,17 @@ public final class ModBridgeServer {
 		});
 	}
 
+	private void handleAgentOpenLan(HttpExchange exchange) throws IOException {
+		handleJsonBody(exchange, "POST", Object.class, request -> {
+			try {
+				return onClientThread(agentRuntime::openLan);
+			}
+			catch (LanHostingService.LanHostingException exception) {
+				throw new BridgeUnavailableException(exception.code(), exception.getMessage());
+			}
+		});
+	}
+
 	private void handleJson(HttpExchange exchange, Supplier<Object> supplier) throws IOException {
 		if (!authorize(exchange)) {
 			writeJson(exchange, 401, Map.of("error", "unauthorized", "message", "Invalid bridge token"));
@@ -365,6 +379,8 @@ public final class ModBridgeServer {
 			response.put("initialized", snapshot.initialized());
 			response.put("tickCount", snapshot.tickCount());
 			response.put("session", snapshot.session());
+			response.put("llmAvailable", agentRuntime.llmAvailable());
+			response.put("degraded", agentRuntime.isDegraded());
 			response.put("verification", snapshot.verification());
 			return response;
 		});
@@ -424,6 +440,17 @@ public final class ModBridgeServer {
 			Map<String, Object> response = new LinkedHashMap<>();
 			response.put("available", true);
 			response.put("tree", agentRuntime.behaviorTreeSnapshot());
+			return response;
+		});
+	}
+
+	private Object createAgentDialogueResponse() {
+		return onClientThread(() -> {
+			Map<String, Object> response = new LinkedHashMap<>();
+			response.put("available", true);
+			response.put("dialogue", agentRuntime.dialogueSnapshot());
+			response.put("lastSpokenTick", agentRuntime.lastSpokenTick());
+			response.put("lastSpokenText", agentRuntime.lastSpokenText());
 			return response;
 		});
 	}

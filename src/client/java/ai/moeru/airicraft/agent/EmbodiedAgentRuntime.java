@@ -1,17 +1,23 @@
 package ai.moeru.airicraft.agent;
 
 import ai.moeru.airicraft.SingleplayerWorldService;
-import ai.moeru.airicraft.agent.events.SemanticEventBuffer;
-import ai.moeru.airicraft.agent.events.SemanticEventQueryResult;
-import ai.moeru.airicraft.agent.dialogue.DialogueIntentType;
-import ai.moeru.airicraft.agent.dialogue.DialogueRuntime;
-import ai.moeru.airicraft.agent.follow.FollowCapability;
-import ai.moeru.airicraft.agent.follow.FollowState;
 import ai.moeru.airicraft.agent.behavior.BehaviorTreeRuntime;
 import ai.moeru.airicraft.agent.behavior.BehaviorTreeSnapshot;
+import ai.moeru.airicraft.agent.dialogue.DialogueIntentType;
+import ai.moeru.airicraft.agent.dialogue.DialogueResponse;
+import ai.moeru.airicraft.agent.dialogue.DialogueSnapshot;
+import ai.moeru.airicraft.agent.dialogue.DialogueRuntime;
+import ai.moeru.airicraft.agent.events.SemanticEventBuffer;
+import ai.moeru.airicraft.agent.events.SemanticEventQueryResult;
+import ai.moeru.airicraft.agent.follow.FollowCapability;
+import ai.moeru.airicraft.agent.follow.FollowState;
 import ai.moeru.airicraft.agent.goals.GoalDirector;
 import ai.moeru.airicraft.agent.goals.GoalSnapshot;
 import ai.moeru.airicraft.agent.goals.GoalType;
+import ai.moeru.airicraft.agent.llm.OpenAiCompatibleLlmBackend;
+import ai.moeru.airicraft.agent.llm.PlannerExecutor;
+import ai.moeru.airicraft.agent.llm.PlannerIntent;
+import ai.moeru.airicraft.agent.llm.PlannerResponse;
 import ai.moeru.airicraft.agent.session.LanHostingService;
 import ai.moeru.airicraft.agent.session.SessionSnapshot;
 import ai.moeru.airicraft.agent.session.SessionRuntime;
@@ -20,11 +26,14 @@ import ai.moeru.airicraft.agent.social.NearbyPlayerSnapshot;
 import ai.moeru.airicraft.agent.social.NearbyPlayerTracker;
 import ai.moeru.airicraft.agent.social.PrimaryInteractionPlayer;
 import ai.moeru.airicraft.agent.social.PrimaryInteractionResolver;
+import ai.moeru.airicraft.agent.speech.SpeechService;
 import ai.moeru.airicraft.agent.verification.VerificationReport;
 import ai.moeru.airicraft.agent.verification.VerificationRunner;
+import ai.moeru.airicraft.agent.verification.scenarios.DialogueVerification;
 import ai.moeru.airicraft.agent.verification.scenarios.FollowVerification;
-import ai.moeru.airicraft.agent.verification.scenarios.SessionVerification;
+import ai.moeru.airicraft.agent.verification.scenarios.LlmDegradationVerification;
 import ai.moeru.airicraft.agent.verification.scenarios.SessionLanVerification;
+import ai.moeru.airicraft.agent.verification.scenarios.SessionVerification;
 import ai.moeru.airicraft.agent.verification.scenarios.SocialChatIngestVerification;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.text.Text;
@@ -45,10 +54,11 @@ public final class EmbodiedAgentRuntime {
 	private final ChatIngestService chatIngestService = new ChatIngestService();
 	private final NearbyPlayerTracker nearbyPlayerTracker = new NearbyPlayerTracker();
 	private final PrimaryInteractionResolver primaryInteractionResolver = new PrimaryInteractionResolver(200L);
-	private final DialogueRuntime dialogueRuntime = new DialogueRuntime();
 	private final GoalDirector goalDirector = new GoalDirector();
 	private final FollowCapability followCapability = new FollowCapability();
 	private final BehaviorTreeRuntime behaviorTreeRuntime = new BehaviorTreeRuntime();
+	private final SpeechService speechService = new SpeechService();
+	private final DialogueRuntime dialogueRuntime;
 
 	private boolean initialized;
 	private long tickCount;
@@ -58,11 +68,15 @@ public final class EmbodiedAgentRuntime {
 
 	public EmbodiedAgentRuntime(AgentConfig config) {
 		this.config = Objects.requireNonNull(config, "config");
+		this.dialogueRuntime = new DialogueRuntime(
+			new PlannerExecutor(new OpenAiCompatibleLlmBackend(config.llm())),
+			config.llm().maxRecentConversationTurns()
+		);
 		registerDefaultScenarios();
 	}
 
 	public static EmbodiedAgentRuntime createDefault() {
-		return new EmbodiedAgentRuntime(AgentConfig.defaults());
+		return new EmbodiedAgentRuntime(AgentConfigLoader.load());
 	}
 
 	public AgentConfig config() {
@@ -93,6 +107,7 @@ public final class EmbodiedAgentRuntime {
 		followCapability.clear();
 		followState = FollowState.idle();
 		behaviorTreeRuntime.stop(MinecraftClient.getInstance());
+		speechService.clear();
 	}
 
 	public void onClientTick(MinecraftClient client) {
@@ -104,11 +119,18 @@ public final class EmbodiedAgentRuntime {
 		if (!wasWorldLoaded && sessionSnapshot.worldLoaded()) {
 			worldLoadTick = tickCount;
 		}
+
 		nearbyPlayerTracker.poll(client, tickCount, eventBuffer);
 		primaryInteractionResolver.current().ifPresent(current ->
 			primaryInteractionResolver.clearIfNotNearby(current.uuid(), nearbyPlayerTracker.isNearby(current.uuid()))
 		);
 		primaryInteractionResolver.expireInactive(tickCount);
+
+		DialogueResponse completedDialogueResponse = dialogueRuntime.poll(tickCount, eventBuffer);
+		if (completedDialogueResponse != null) {
+			goalDirector.onPlannerResponse(completedDialogueResponse);
+		}
+
 		followState = followCapability.tick(
 			client,
 			sessionSnapshot,
@@ -121,6 +143,7 @@ public final class EmbodiedAgentRuntime {
 			client,
 			sessionSnapshot,
 			dialogueRuntime,
+			speechService,
 			goalDirector.activeGoal(),
 			followState,
 			tickCount
@@ -128,6 +151,7 @@ public final class EmbodiedAgentRuntime {
 		if (previousFollowState.targetNearby() && !followState.targetNearby() && previousFollowState.targetPlayer() != null) {
 			goalDirector.clearFollowGoal(previousFollowState.targetPlayer());
 		}
+
 		BehaviorTreeSnapshot currentTreeSnapshot = behaviorTreeRuntime.snapshot();
 		if (
 			followState.goalActive()
@@ -140,6 +164,7 @@ public final class EmbodiedAgentRuntime {
 				"distanceToTarget", followState.distanceToTarget()
 			));
 		}
+
 		verificationRunner.onTick();
 	}
 
@@ -151,11 +176,12 @@ public final class EmbodiedAgentRuntime {
 		nearbyPlayerTracker.clear(tickCount, eventBuffer);
 		eventBuffer.clear();
 		primaryInteractionResolver.clear();
-		dialogueRuntime.clear();
+		dialogueRuntime.shutdown();
 		goalDirector.clear();
 		followCapability.clear();
 		followState = FollowState.idle();
 		behaviorTreeRuntime.stop(MinecraftClient.getInstance());
+		speechService.clear();
 		sessionSnapshot = SessionSnapshot.initial();
 	}
 
@@ -184,8 +210,28 @@ public final class EmbodiedAgentRuntime {
 		return behaviorTreeRuntime.snapshot();
 	}
 
-	public Optional<ai.moeru.airicraft.agent.dialogue.DialogueResponse> lastDialogueResponse() {
+	public Optional<DialogueResponse> lastDialogueResponse() {
 		return dialogueRuntime.lastResponse();
+	}
+
+	public DialogueSnapshot dialogueSnapshot() {
+		return dialogueRuntime.snapshot();
+	}
+
+	public boolean llmAvailable() {
+		return dialogueRuntime.llmAvailable();
+	}
+
+	public boolean isDegraded() {
+		return dialogueRuntime.isDegraded();
+	}
+
+	public long lastSpokenTick() {
+		return speechService.lastSpokenTick();
+	}
+
+	public String lastSpokenText() {
+		return speechService.lastSpokenText();
 	}
 
 	public boolean startVerification(String scenarioName) {
@@ -201,8 +247,20 @@ public final class EmbodiedAgentRuntime {
 			primaryInteractionResolver,
 			eventBuffer
 		);
-		if (nearbyPlayerTracker.findByName(senderName).isPresent()) {
-			goalDirector.onAddressedChat(senderName, plainTextMessage, tickCount, dialogueRuntime);
+
+		if (dialogueRuntime.handleResetCommand(senderName, plainTextMessage, tickCount, eventBuffer)) {
+			return;
+		}
+
+		if (nearbyPlayerTracker.findByName(senderName).isPresent() && ChatIngestService.isAddressedToAgent(plainTextMessage)) {
+			dialogueRuntime.onAddressedChat(
+				senderName,
+				plainTextMessage,
+				tickCount,
+				sessionSnapshot,
+				primaryInteractionResolver.current().map(PrimaryInteractionPlayer::name).orElse(null),
+				goalDirector.activeGoal()
+			);
 		}
 	}
 
@@ -222,6 +280,14 @@ public final class EmbodiedAgentRuntime {
 		return lanHostingService.openLan(sessionSnapshot);
 	}
 
+	public void injectMockPlannerResponse(PlannerResponse response) {
+		dialogueRuntime.injectMockResponse(response);
+	}
+
+	public void injectPlannerTimeout() {
+		dialogueRuntime.injectTimeout();
+	}
+
 	private void registerDefaultScenarios() {
 		verificationRunner.register(new SessionVerification(
 			() -> sessionSnapshot.mode(),
@@ -232,7 +298,7 @@ public final class EmbodiedAgentRuntime {
 		));
 		verificationRunner.register(new SessionLanVerification(
 			() -> sessionSnapshot.mode(),
-			() -> openLan(),
+			this::openLan,
 			() -> sessionSnapshot.lanPort() > 0,
 			() -> eventBuffer.containsType("session.lan_opened")
 		));
@@ -248,6 +314,10 @@ public final class EmbodiedAgentRuntime {
 		));
 		verificationRunner.register(new FollowVerification(
 			() -> sessionSnapshot.worldLoaded(),
+			() -> injectMockPlannerResponse(new PlannerResponse(
+				"Following Alice.",
+				new PlannerIntent("set_goal", GoalType.FOLLOW_PLAYER, "Alice")
+			)),
 			() -> nearbyPlayerTracker.injectPlayerNearby("Alice", playerOffset(5.0D), tickCount, eventBuffer),
 			() -> onChatReceived("Alice", "@agent follow me"),
 			() -> lastDialogueResponse().isPresent(),
@@ -260,6 +330,34 @@ public final class EmbodiedAgentRuntime {
 			() -> behaviorTreeSnapshot().activeNodePath().stream().anyMatch(node -> node.contains("MoveCloser")),
 			() -> nearbyPlayerTracker.injectPlayerDisconnect("Alice", tickCount, eventBuffer),
 			() -> eventBuffer.containsTypeForPlayer("follow.target_lost", "Alice")
+		));
+		verificationRunner.register(new DialogueVerification(
+			() -> sessionSnapshot.worldLoaded(),
+			() -> nearbyPlayerTracker.injectPlayerNearby("Alice", playerOffset(5.0D), tickCount, eventBuffer),
+			() -> injectMockPlannerResponse(new PlannerResponse(
+				"Sure, I'll follow you!",
+				new PlannerIntent("set_goal", GoalType.FOLLOW_PLAYER, "Alice")
+			)),
+			() -> onChatReceived("Alice", "@agent follow me"),
+			() -> lastDialogueResponse().isPresent(),
+			() -> lastDialogueResponse().map(response -> response.text() != null && !response.text().isBlank()).orElse(false),
+			() -> lastSpokenTick() > 0L,
+			() -> activeGoal().map(goal -> goal.type() == GoalType.FOLLOW_PLAYER).orElse(false)
+		));
+		verificationRunner.register(new LlmDegradationVerification(
+			() -> sessionSnapshot.worldLoaded(),
+			() -> injectPlannerTimeout(),
+			() -> injectPlannerTimeout(),
+			() -> injectPlannerTimeout(),
+			() -> isDegraded(),
+			() -> behaviorTreeSnapshot().activeNodePath() != null && !behaviorTreeSnapshot().activeNodePath().isEmpty(),
+			() -> eventBuffer.containsType("planner.degraded_entered"),
+			() -> lastSpokenTick() > 0L,
+			() -> onChatReceived("Alice", "@agent reset"),
+			() -> !isDegraded(),
+			() -> eventBuffer.containsType("planner.degraded_cleared"),
+			() -> eventBuffer.containsType("planner.reset_requested"),
+			() -> "Planner state reset.".equals(lastSpokenText())
 		));
 	}
 

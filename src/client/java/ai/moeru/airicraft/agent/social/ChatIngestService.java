@@ -34,7 +34,7 @@ public final class ChatIngestService {
 		));
 		primaryInteractionResolver.onPlayerSpoke(nearbyPlayer.get(), tick);
 
-		if (normalizedMessage.regionMatches(true, 0, "@agent", 0, "@agent".length())) {
+		if (isAddressedToAgent(plainTextMessage)) {
 			eventBuffer.append(tick, "social.player_addressed_agent", Map.of(
 				"player", senderName,
 				"message", plainTextMessage,
@@ -54,7 +54,12 @@ public final class ChatIngestService {
 		ingest(senderName, plainTextMessage, tick, nearbyPlayerTracker, primaryInteractionResolver, eventBuffer);
 	}
 
-	private static String normalize(String plainTextMessage) {
+	public static boolean isAddressedToAgent(String plainTextMessage) {
+		String normalizedMessage = normalize(plainTextMessage);
+		return normalizedMessage.regionMatches(true, 0, "@agent", 0, "@agent".length());
+	}
+
+	public static String normalize(String plainTextMessage) {
 		return plainTextMessage.stripLeading();
 	}
 }
