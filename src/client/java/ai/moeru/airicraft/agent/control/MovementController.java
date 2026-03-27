@@ -14,6 +14,7 @@ public final class MovementController {
 	private boolean stuck;
 	private long movingSinceTick = -1L;
 	private Vec3d movementStartPos;
+	private Boolean previousAutoJumpValue;
 
 	public void moveForward(MinecraftClient client, boolean sprint, boolean jump, long tick) {
 		if (client == null) {
@@ -34,14 +35,16 @@ public final class MovementController {
 
 		movingForward = true;
 		sprinting = sprint;
-		jumping = jump;
+		boolean effectiveJump = shouldJump(player, jump);
+		jumping = effectiveJump;
+		enableAutoJump(client);
 
 		client.options.forwardKey.setPressed(true);
 		client.options.backKey.setPressed(false);
 		client.options.leftKey.setPressed(false);
 		client.options.rightKey.setPressed(false);
 		client.options.sprintKey.setPressed(sprint);
-		client.options.jumpKey.setPressed(jump);
+		client.options.jumpKey.setPressed(effectiveJump);
 		player.setSprinting(sprint);
 
 		updateStuckState(player, tick);
@@ -65,6 +68,7 @@ public final class MovementController {
 		client.options.rightKey.setPressed(false);
 		client.options.jumpKey.setPressed(false);
 		client.options.sprintKey.setPressed(false);
+		restoreAutoJump(client);
 		if (client.player != null) {
 			client.player.setSprinting(false);
 		}
@@ -91,5 +95,35 @@ public final class MovementController {
 			movingSinceTick = tick;
 			movementStartPos = currentPos;
 		}
+	}
+
+	private static boolean shouldJump(ClientPlayerEntity player, boolean requestedJump) {
+		if (requestedJump) {
+			return true;
+		}
+
+		if (player.isTouchingWater() || player.isSubmergedInWater()) {
+			return true;
+		}
+
+		return player.horizontalCollision && player.isOnGround();
+	}
+
+	private void enableAutoJump(MinecraftClient client) {
+		if (client == null || client.options == null) {
+			return;
+		}
+		if (previousAutoJumpValue == null) {
+			previousAutoJumpValue = client.options.getAutoJump().getValue();
+		}
+		client.options.getAutoJump().setValue(true);
+	}
+
+	private void restoreAutoJump(MinecraftClient client) {
+		if (client == null || client.options == null || previousAutoJumpValue == null) {
+			return;
+		}
+		client.options.getAutoJump().setValue(previousAutoJumpValue);
+		previousAutoJumpValue = null;
 	}
 }
