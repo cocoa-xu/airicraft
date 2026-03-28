@@ -254,8 +254,10 @@ public final class EmbodiedAgentRuntime {
 			return;
 		}
 
-		if (nearbyPlayerTracker.findByName(senderName).isPresent() && ChatIngestService.isAddressedToAgent(plainTextMessage)) {
-			dialogueRuntime.onAddressedChat(
+		boolean plannerEligibleChat = ChatIngestService.isAddressedToAgent(plainTextMessage)
+			|| config.llm().enableProactiveSocialMode();
+		if (nearbyPlayerTracker.findByName(senderName).isPresent() && plannerEligibleChat) {
+			dialogueRuntime.onPlayerChat(
 				senderName,
 				plainTextMessage,
 				tickCount,

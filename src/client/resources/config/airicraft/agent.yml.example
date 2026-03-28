@@ -13,5 +13,5 @@ requestTimeoutMillis: 15000
 # Number of recent dialogue turns retained in planner context.
 maxRecentConversationTurns: 8
 
-# Reserved for future proactive behavior.
+# When true, nearby non-@agent chat also goes through the planner.
 enableProactiveSocialMode: false

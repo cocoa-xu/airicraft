@@ -118,7 +118,7 @@ public final class DialogueRuntime {
 		return true;
 	}
 
-	public void onAddressedChat(
+	public void onPlayerChat(
 		String senderName,
 		String plainTextMessage,
 		long tick,
