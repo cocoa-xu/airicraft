@@ -3,6 +3,7 @@ package ai.moeru.airicraft.agent;
 import ai.moeru.airicraft.SingleplayerWorldService;
 import ai.moeru.airicraft.agent.behavior.BehaviorTreeRuntime;
 import ai.moeru.airicraft.agent.behavior.BehaviorTreeSnapshot;
+import ai.moeru.airicraft.agent.chat.ChatService;
 import ai.moeru.airicraft.agent.dialogue.DialogueIntentType;
 import ai.moeru.airicraft.agent.dialogue.DialogueResponse;
 import ai.moeru.airicraft.agent.dialogue.DialogueSnapshot;
@@ -26,7 +27,6 @@ import ai.moeru.airicraft.agent.social.NearbyPlayerSnapshot;
 import ai.moeru.airicraft.agent.social.NearbyPlayerTracker;
 import ai.moeru.airicraft.agent.social.PrimaryInteractionPlayer;
 import ai.moeru.airicraft.agent.social.PrimaryInteractionResolver;
-import ai.moeru.airicraft.agent.speech.SpeechService;
 import ai.moeru.airicraft.agent.verification.VerificationReport;
 import ai.moeru.airicraft.agent.verification.VerificationRunner;
 import ai.moeru.airicraft.agent.verification.scenarios.DialogueVerification;
@@ -57,7 +57,7 @@ public final class EmbodiedAgentRuntime {
 	private final GoalDirector goalDirector = new GoalDirector();
 	private final FollowCapability followCapability = new FollowCapability();
 	private final BehaviorTreeRuntime behaviorTreeRuntime = new BehaviorTreeRuntime();
-	private final SpeechService speechService = new SpeechService();
+	private final ChatService chatService = new ChatService();
 	private final DialogueRuntime dialogueRuntime;
 
 	private boolean initialized;
@@ -107,7 +107,7 @@ public final class EmbodiedAgentRuntime {
 		followCapability.clear();
 		followState = FollowState.idle();
 		behaviorTreeRuntime.stop(MinecraftClient.getInstance());
-		speechService.clear();
+		chatService.clear();
 	}
 
 	public void onClientTick(MinecraftClient client) {
@@ -145,7 +145,7 @@ public final class EmbodiedAgentRuntime {
 			client,
 			sessionSnapshot,
 			dialogueRuntime,
-			speechService,
+			chatService,
 			goalDirector.activeGoal(),
 			followState,
 			tickCount
@@ -183,7 +183,7 @@ public final class EmbodiedAgentRuntime {
 		followCapability.clear();
 		followState = FollowState.idle();
 		behaviorTreeRuntime.stop(MinecraftClient.getInstance());
-		speechService.clear();
+		chatService.clear();
 		sessionSnapshot = SessionSnapshot.initial();
 	}
 
@@ -228,12 +228,12 @@ public final class EmbodiedAgentRuntime {
 		return dialogueRuntime.isDegraded();
 	}
 
-	public long lastSpokenTick() {
-		return speechService.lastSpokenTick();
+	public long lastChatTick() {
+		return chatService.lastChatTick();
 	}
 
-	public String lastSpokenText() {
-		return speechService.lastSpokenText();
+	public String lastChatText() {
+		return chatService.lastChatText();
 	}
 
 	public boolean startVerification(String scenarioName) {
@@ -385,7 +385,7 @@ public final class EmbodiedAgentRuntime {
 			() -> onChatReceived("Alice", "@agent follow me"),
 			() -> lastDialogueResponse().isPresent(),
 			() -> lastDialogueResponse().map(response -> response.text() != null && !response.text().isBlank()).orElse(false),
-			() -> lastSpokenTick() > 0L,
+			() -> lastChatTick() > 0L,
 			() -> activeGoal().map(goal -> goal.type() == GoalType.FOLLOW_PLAYER).orElse(false)
 		));
 		verificationRunner.register(new LlmDegradationVerification(
@@ -396,12 +396,12 @@ public final class EmbodiedAgentRuntime {
 			() -> isDegraded(),
 			() -> behaviorTreeSnapshot().activeNodePath() != null && !behaviorTreeSnapshot().activeNodePath().isEmpty(),
 			() -> eventBuffer.containsType("planner.degraded_entered"),
-			() -> lastSpokenTick() > 0L,
+			() -> lastChatTick() > 0L,
 			() -> onChatReceived("Alice", "@agent reset"),
 			() -> !isDegraded(),
 			() -> eventBuffer.containsType("planner.degraded_cleared"),
 			() -> eventBuffer.containsType("planner.reset_requested"),
-			() -> "Planner state reset.".equals(lastSpokenText())
+			() -> "Planner state reset.".equals(lastChatText())
 		));
 	}
 

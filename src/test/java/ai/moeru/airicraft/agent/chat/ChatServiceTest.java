@@ -1,14 +1,14 @@
-package ai.moeru.airicraft.agent.speech;
+package ai.moeru.airicraft.agent.chat;
 
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 
-class SpeechServiceTest {
+class ChatServiceTest {
 	@Test
 	void sanitizeForChatCollapsesWhitespaceAndStripsLeadingSlash() {
-		String sanitized = SpeechService.sanitizeForChat("  /test\n\nhello\tworld  ");
+		String sanitized = ChatService.sanitizeForChat("  /test\n\nhello\tworld  ");
 
 		assertEquals("test hello world", sanitized);
 	}
@@ -17,9 +17,9 @@ class SpeechServiceTest {
 	void sanitizeForChatStripsFormattingCodeAndTruncatesLongMessages() {
 		String longText = "§a" + "a".repeat(400);
 
-		String sanitized = SpeechService.sanitizeForChat(longText);
+		String sanitized = ChatService.sanitizeForChat(longText);
 
 		assertFalse(sanitized.contains("§"));
-		assertEquals(SpeechService.MAX_CHAT_MESSAGE_LENGTH, sanitized.length());
+		assertEquals(ChatService.MAX_CHAT_MESSAGE_LENGTH, sanitized.length());
 	}
 }

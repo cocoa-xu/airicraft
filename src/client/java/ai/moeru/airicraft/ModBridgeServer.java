@@ -449,8 +449,8 @@ public final class ModBridgeServer {
 			Map<String, Object> response = new LinkedHashMap<>();
 			response.put("available", true);
 			response.put("dialogue", agentRuntime.dialogueSnapshot());
-			response.put("lastSpokenTick", agentRuntime.lastSpokenTick());
-			response.put("lastSpokenText", agentRuntime.lastSpokenText());
+			response.put("lastChatTick", agentRuntime.lastChatTick());
+			response.put("lastChatText", agentRuntime.lastChatText());
 			return response;
 		});
 	}

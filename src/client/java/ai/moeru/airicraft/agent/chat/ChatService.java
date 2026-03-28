@@ -1,15 +1,15 @@
-package ai.moeru.airicraft.agent.speech;
+package ai.moeru.airicraft.agent.chat;
 
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.ClientPlayNetworkHandler;
 
-public final class SpeechService {
+public final class ChatService {
 	static final int MAX_CHAT_MESSAGE_LENGTH = 220;
 
-	private long lastSpokenTick = -1L;
-	private String lastSpokenText;
+	private long lastChatTick = -1L;
+	private String lastChatText;
 
-	public boolean speak(MinecraftClient client, String text, long tick) {
+	public boolean send(MinecraftClient client, String text, long tick) {
 		if (client == null || text == null || text.isBlank()) {
 			return false;
 		}
@@ -25,8 +25,8 @@ public final class SpeechService {
 		}
 
 		networkHandler.sendChatMessage(sanitizedText);
-		lastSpokenTick = tick;
-		lastSpokenText = sanitizedText;
+		lastChatTick = tick;
+		lastChatText = sanitizedText;
 		return true;
 	}
 
@@ -67,16 +67,16 @@ public final class SpeechService {
 		return sanitized;
 	}
 
-	public long lastSpokenTick() {
-		return lastSpokenTick;
+	public long lastChatTick() {
+		return lastChatTick;
 	}
 
-	public String lastSpokenText() {
-		return lastSpokenText;
+	public String lastChatText() {
+		return lastChatText;
 	}
 
 	public void clear() {
-		lastSpokenTick = -1L;
-		lastSpokenText = null;
+		lastChatTick = -1L;
+		lastChatText = null;
 	}
 }

@@ -14,7 +14,7 @@ public final class DialogueVerification extends VerificationScenario {
 	private final Runnable injectFollowRequest;
 	private final Supplier<Boolean> dialogueResponseAvailable;
 	private final Supplier<Boolean> replyTextNonEmpty;
-	private final BooleanSupplier speechObserved;
+	private final BooleanSupplier chatObserved;
 	private final Supplier<Boolean> followGoalActive;
 
 	public DialogueVerification(
@@ -24,7 +24,7 @@ public final class DialogueVerification extends VerificationScenario {
 		Runnable injectFollowRequest,
 		Supplier<Boolean> dialogueResponseAvailable,
 		Supplier<Boolean> replyTextNonEmpty,
-		BooleanSupplier speechObserved,
+		BooleanSupplier chatObserved,
 		Supplier<Boolean> followGoalActive
 	) {
 		this.worldLoaded = Objects.requireNonNull(worldLoaded, "worldLoaded");
@@ -33,7 +33,7 @@ public final class DialogueVerification extends VerificationScenario {
 		this.injectFollowRequest = Objects.requireNonNull(injectFollowRequest, "injectFollowRequest");
 		this.dialogueResponseAvailable = Objects.requireNonNull(dialogueResponseAvailable, "dialogueResponseAvailable");
 		this.replyTextNonEmpty = Objects.requireNonNull(replyTextNonEmpty, "replyTextNonEmpty");
-		this.speechObserved = Objects.requireNonNull(speechObserved, "speechObserved");
+		this.chatObserved = Objects.requireNonNull(chatObserved, "chatObserved");
 		this.followGoalActive = Objects.requireNonNull(followGoalActive, "followGoalActive");
 	}
 
@@ -51,7 +51,7 @@ public final class DialogueVerification extends VerificationScenario {
 			.action("inject follow request", injectFollowRequest)
 			.waitUntil("dialogue response available", 300, dialogueResponseAvailable::get)
 			.assertThat("reply text is non-empty", replyTextNonEmpty::get)
-			.waitUntil("agent spoke", 100, speechObserved)
+			.waitUntil("agent sent chat", 100, chatObserved)
 			.assertThat("follow goal active", followGoalActive::get);
 	}
 }
