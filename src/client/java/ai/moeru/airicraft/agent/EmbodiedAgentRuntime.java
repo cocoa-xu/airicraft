@@ -128,7 +128,9 @@ public final class EmbodiedAgentRuntime {
 
 		DialogueResponse completedDialogueResponse = dialogueRuntime.poll(tickCount, eventBuffer);
 		if (completedDialogueResponse != null) {
+			Optional<GoalSnapshot> previousGoal = goalDirector.activeGoal();
 			goalDirector.onPlannerResponse(completedDialogueResponse);
+			recordPlannerOutcome(completedDialogueResponse, previousGoal, goalDirector.activeGoal());
 		}
 
 		followState = followCapability.tick(
@@ -286,6 +288,46 @@ public final class EmbodiedAgentRuntime {
 
 	public void injectPlannerTimeout() {
 		dialogueRuntime.injectTimeout();
+	}
+
+	private void recordPlannerOutcome(
+		DialogueResponse response,
+		Optional<GoalSnapshot> previousGoal,
+		Optional<GoalSnapshot> currentGoal
+	) {
+		if (response == null || response.intent() == null || response.intent().type() == null) {
+			return;
+		}
+
+		java.util.LinkedHashMap<String, Object> payload = new java.util.LinkedHashMap<>();
+		payload.put("intentType", response.intent().type().name());
+		if (response.intent().targetPlayer() != null && !response.intent().targetPlayer().isBlank()) {
+			payload.put("targetPlayer", response.intent().targetPlayer());
+		}
+		if (response.intent().goalType() != null) {
+			payload.put("goalType", response.intent().goalType().name());
+		}
+		if (response.text() != null && !response.text().isBlank()) {
+			payload.put("replyText", response.text());
+		}
+		eventBuffer.append(tickCount, "planner.response_applied", payload);
+
+		if (response.intent().type() == DialogueIntentType.SET_GOAL && currentGoal.isPresent()) {
+			eventBuffer.append(tickCount, "planner.goal_set", Map.of(
+				"goalType", currentGoal.get().type().name(),
+				"targetPlayer", currentGoal.get().targetPlayer(),
+				"source", currentGoal.get().source()
+			));
+			return;
+		}
+
+		if (response.intent().type() == DialogueIntentType.CLEAR_GOAL && previousGoal.isPresent() && currentGoal.isEmpty()) {
+			eventBuffer.append(tickCount, "planner.goal_cleared", Map.of(
+				"goalType", previousGoal.get().type().name(),
+				"targetPlayer", previousGoal.get().targetPlayer(),
+				"source", previousGoal.get().source()
+			));
+		}
 	}
 
 	private void registerDefaultScenarios() {
