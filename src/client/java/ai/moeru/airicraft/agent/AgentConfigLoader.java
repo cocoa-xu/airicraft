@@ -4,6 +4,7 @@ import ai.moeru.airicraft.Airicraft;
 import com.google.gson.Gson;
 import com.google.gson.JsonParseException;
 import net.fabricmc.loader.api.FabricLoader;
+import org.yaml.snakeyaml.DumperOptions;
 import org.yaml.snakeyaml.Yaml;
 
 import java.io.IOException;
@@ -17,7 +18,7 @@ import java.util.Map;
 
 public final class AgentConfigLoader {
 	private static final Gson GSON = new Gson();
-	private static final Yaml YAML = new Yaml();
+	private static final Yaml YAML = createYaml();
 	private static final String TEMPLATE_RESOURCE = "/config/airicraft/agent.yml.example";
 	private static final String TEMPLATE_FILENAME = "agent.yml.example";
 	private static final String CONFIG_FILENAME = "agent.yml";
@@ -106,7 +107,7 @@ public final class AgentConfigLoader {
 		yamlData.put("requestTimeoutMillis", readInt(root, "requestTimeoutMillis", defaults.llm().requestTimeoutMillis()));
 		yamlData.put("maxRecentConversationTurns", readInt(root, "maxRecentConversationTurns", defaults.llm().maxRecentConversationTurns()));
 		yamlData.put("enableProactiveSocialMode", readBoolean(root, "enableProactiveSocialMode", defaults.llm().enableProactiveSocialMode()));
-		Files.writeString(yamlConfigPath, YAML.dump(yamlData), StandardCharsets.UTF_8);
+		Files.writeString(yamlConfigPath, dumpYaml(yamlData), StandardCharsets.UTF_8);
 	}
 
 	private static String readString(Map<String, Object> root, String fieldName, String fallback) {
@@ -137,5 +138,17 @@ public final class AgentConfigLoader {
 			return booleanValue;
 		}
 		return Boolean.parseBoolean(String.valueOf(value));
+	}
+
+	private static Yaml createYaml() {
+		DumperOptions options = new DumperOptions();
+		options.setDefaultFlowStyle(DumperOptions.FlowStyle.BLOCK);
+		options.setPrettyFlow(true);
+		options.setIndent(2);
+		return new Yaml(options);
+	}
+
+	private static String dumpYaml(Map<String, Object> yamlData) {
+		return YAML.dump(yamlData);
 	}
 }
