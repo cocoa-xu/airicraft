@@ -38,6 +38,12 @@ public final class OpenAiCompatibleLlmBackend implements LlmBackend {
 		  }
 		}
 		Only choose FOLLOW_PLAYER when the player explicitly asks the companion to follow.
+		replyText must be a single plain Minecraft chat line.
+		Keep replyText under 160 characters.
+		Do not use markdown, code fences, bullet lists, decorative formatting, or multi-line text.
+		Plain text is preferred. A light kaomoji or a single simple emoji is acceptable, but keep it sparse.
+		Do not start replyText with a slash.
+		Do not claim capabilities the companion does not actually have.
 		""";
 
 	private final AgentConfig.LlmConfig config;
@@ -147,8 +153,8 @@ public final class OpenAiCompatibleLlmBackend implements LlmBackend {
 		for (DialogueTurn turn : request.recentTurns()) {
 			builder.append("- ").append(turn.speaker()).append(": ").append(turn.text()).append('\n');
 		}
-		builder.append("Latest addressed message from ").append(request.senderName()).append(": ").append(request.message()).append('\n');
-		builder.append("Decide whether to set or clear a goal, and provide a concise reply.");
+		builder.append("Latest player message from ").append(request.senderName()).append(": ").append(request.message()).append('\n');
+		builder.append("Decide whether to set or clear a goal, and provide a concise plain-text reply that is safe to send in Minecraft chat.");
 		return builder.toString();
 	}
 
