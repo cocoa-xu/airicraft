@@ -4,7 +4,7 @@ import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.ClientPlayNetworkHandler;
 
 public final class ChatService {
-	static final int MAX_CHAT_MESSAGE_LENGTH = 220;
+	public static final int MAX_CHAT_MESSAGE_LENGTH = 220;
 
 	private long lastChatTick = -1L;
 	private String lastChatText;

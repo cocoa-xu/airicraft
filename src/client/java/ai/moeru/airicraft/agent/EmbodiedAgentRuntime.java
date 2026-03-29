@@ -30,10 +30,17 @@ import ai.moeru.airicraft.agent.social.PrimaryInteractionResolver;
 import ai.moeru.airicraft.agent.verification.VerificationReport;
 import ai.moeru.airicraft.agent.verification.VerificationRunner;
 import ai.moeru.airicraft.agent.verification.scenarios.DialogueVerification;
+import ai.moeru.airicraft.agent.verification.scenarios.DialogueChatSanitizationVerification;
+import ai.moeru.airicraft.agent.verification.scenarios.DialogueClearGoalVerification;
+import ai.moeru.airicraft.agent.verification.scenarios.DialogueProactiveSocialModeVerification;
 import ai.moeru.airicraft.agent.verification.scenarios.FollowVerification;
+import ai.moeru.airicraft.agent.verification.scenarios.FollowReacquireTargetVerification;
 import ai.moeru.airicraft.agent.verification.scenarios.LlmDegradationVerification;
+import ai.moeru.airicraft.agent.verification.scenarios.LlmDegradationGoalPreservedVerification;
+import ai.moeru.airicraft.agent.verification.scenarios.PlannerObservabilityVerification;
 import ai.moeru.airicraft.agent.verification.scenarios.SessionLanVerification;
 import ai.moeru.airicraft.agent.verification.scenarios.SessionVerification;
+import ai.moeru.airicraft.agent.verification.scenarios.SocialPrimaryInteractionTtlVerification;
 import ai.moeru.airicraft.agent.verification.scenarios.SocialChatIngestVerification;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.text.Text;
@@ -63,6 +70,7 @@ public final class EmbodiedAgentRuntime {
 	private boolean initialized;
 	private long tickCount;
 	private long worldLoadTick = -1L;
+	private Boolean proactiveSocialModeOverride;
 	private SessionSnapshot sessionSnapshot = SessionSnapshot.initial();
 	private FollowState followState = FollowState.idle();
 
@@ -108,6 +116,7 @@ public final class EmbodiedAgentRuntime {
 		followState = FollowState.idle();
 		behaviorTreeRuntime.stop(MinecraftClient.getInstance());
 		chatService.clear();
+		proactiveSocialModeOverride = null;
 	}
 
 	public void onClientTick(MinecraftClient client) {
@@ -184,6 +193,7 @@ public final class EmbodiedAgentRuntime {
 		followState = FollowState.idle();
 		behaviorTreeRuntime.stop(MinecraftClient.getInstance());
 		chatService.clear();
+		proactiveSocialModeOverride = null;
 		sessionSnapshot = SessionSnapshot.initial();
 	}
 
@@ -237,6 +247,7 @@ public final class EmbodiedAgentRuntime {
 	}
 
 	public boolean startVerification(String scenarioName) {
+		proactiveSocialModeOverride = null;
 		return verificationRunner.start(scenarioName);
 	}
 
@@ -255,7 +266,7 @@ public final class EmbodiedAgentRuntime {
 		}
 
 		boolean plannerEligibleChat = ChatIngestService.isAddressedToAgent(plainTextMessage)
-			|| config.llm().enableProactiveSocialMode();
+			|| proactiveSocialModeEnabled();
 		if (nearbyPlayerTracker.findByName(senderName).isPresent() && plannerEligibleChat) {
 			dialogueRuntime.onPlayerChat(
 				senderName,
@@ -290,6 +301,16 @@ public final class EmbodiedAgentRuntime {
 
 	public void injectPlannerTimeout() {
 		dialogueRuntime.injectTimeout();
+	}
+
+	private boolean proactiveSocialModeEnabled() {
+		return proactiveSocialModeOverride != null
+			? proactiveSocialModeOverride.booleanValue()
+			: config.llm().enableProactiveSocialMode();
+	}
+
+	private void setProactiveSocialModeOverride(Boolean enabled) {
+		proactiveSocialModeOverride = enabled;
 	}
 
 	private void recordPlannerOutcome(
@@ -388,6 +409,59 @@ public final class EmbodiedAgentRuntime {
 			() -> lastChatTick() > 0L,
 			() -> activeGoal().map(goal -> goal.type() == GoalType.FOLLOW_PLAYER).orElse(false)
 		));
+		verificationRunner.register(new DialogueChatSanitizationVerification(
+			() -> sessionSnapshot.worldLoaded(),
+			() -> nearbyPlayerTracker.injectPlayerNearby("SanitizeAlice", playerOffset(5.0D), tickCount, eventBuffer),
+			() -> lastChatTick(),
+			this::lastChatText,
+			() -> injectMockPlannerResponse(new PlannerResponse(
+				"/follow me\n\n§a".repeat(40),
+				new PlannerIntent("reply_only", null, null)
+			)),
+			() -> onChatReceived("SanitizeAlice", "@agent say something")
+		));
+		verificationRunner.register(new DialogueClearGoalVerification(
+			() -> sessionSnapshot.worldLoaded(),
+			() -> nearbyPlayerTracker.injectPlayerNearby("ClearGoalAlice", playerOffset(5.0D), tickCount, eventBuffer),
+			() -> eventBuffer.latestSeqNo(),
+			() -> injectMockPlannerResponse(new PlannerResponse(
+				"Following ClearGoalAlice.",
+				new PlannerIntent("set_goal", GoalType.FOLLOW_PLAYER, "ClearGoalAlice")
+			)),
+			() -> onChatReceived("ClearGoalAlice", "@agent follow me"),
+			() -> activeGoal().map(goal -> goal.type() == GoalType.FOLLOW_PLAYER && "ClearGoalAlice".equals(goal.targetPlayer())).orElse(false),
+			() -> injectMockPlannerResponse(new PlannerResponse(
+				"Stopping.",
+				new PlannerIntent("clear_goal", null, null)
+			)),
+			() -> onChatReceived("ClearGoalAlice", "@agent stop following"),
+			() -> activeGoal().isEmpty(),
+			() -> !behaviorTreeSnapshot().activeNodePath().contains("FollowPlayerSubtree"),
+			sinceSeqNo -> eventBuffer.containsTypeSince(sinceSeqNo, "planner.goal_set"),
+			sinceSeqNo -> eventBuffer.containsTypeSince(sinceSeqNo, "planner.goal_cleared")
+		));
+		verificationRunner.register(new SocialPrimaryInteractionTtlVerification(
+			() -> sessionSnapshot.worldLoaded(),
+			() -> nearbyPlayerTracker.injectPlayerNearby("TtlAlice", playerOffset(5.0D), tickCount, eventBuffer),
+			() -> chatIngestService.injectMessage("TtlAlice", "hello", tickCount, nearbyPlayerTracker, primaryInteractionResolver, eventBuffer),
+			() -> primaryInteractionResolver.current().map(PrimaryInteractionPlayer::name).filter("TtlAlice"::equals).isPresent(),
+			() -> primaryInteractionResolver.current().isEmpty(),
+			() -> nearbyPlayerTracker.injectPlayerNearby("TtlBob", playerOffset(6.0D), tickCount, eventBuffer),
+			() -> chatIngestService.injectMessage("TtlBob", "hey there", tickCount, nearbyPlayerTracker, primaryInteractionResolver, eventBuffer),
+			() -> primaryInteractionResolver.current().map(PrimaryInteractionPlayer::name).filter("TtlBob"::equals).isPresent()
+		));
+		verificationRunner.register(new DialogueProactiveSocialModeVerification(
+			() -> sessionSnapshot.worldLoaded(),
+			() -> nearbyPlayerTracker.injectPlayerNearby("ProactiveAlice", playerOffset(5.0D), tickCount, eventBuffer),
+			enabled -> setProactiveSocialModeOverride(enabled),
+			() -> lastDialogueResponse().map(DialogueResponse::tick).orElse(-1L),
+			() -> tickCount,
+			() -> onChatReceived("ProactiveAlice", "hello there"),
+			() -> injectMockPlannerResponse(new PlannerResponse(
+				"Hi ProactiveAlice.",
+				new PlannerIntent("reply_only", null, null)
+			))
+		));
 		verificationRunner.register(new LlmDegradationVerification(
 			() -> sessionSnapshot.worldLoaded(),
 			() -> injectPlannerTimeout(),
@@ -402,6 +476,70 @@ public final class EmbodiedAgentRuntime {
 			() -> eventBuffer.containsType("planner.degraded_cleared"),
 			() -> eventBuffer.containsType("planner.reset_requested"),
 			() -> "Planner state reset.".equals(lastChatText())
+		));
+		verificationRunner.register(new LlmDegradationGoalPreservedVerification(
+			() -> sessionSnapshot.worldLoaded(),
+			() -> nearbyPlayerTracker.injectPlayerNearby("DegradedAlice", playerOffset(5.0D), tickCount, eventBuffer),
+			() -> injectMockPlannerResponse(new PlannerResponse(
+				"Following DegradedAlice.",
+				new PlannerIntent("set_goal", GoalType.FOLLOW_PLAYER, "DegradedAlice")
+			)),
+			() -> onChatReceived("DegradedAlice", "@agent follow me"),
+			() -> activeGoal().map(goal -> goal.type() == GoalType.FOLLOW_PLAYER && "DegradedAlice".equals(goal.targetPlayer())).orElse(false),
+			this::injectPlannerTimeout,
+			this::injectPlannerTimeout,
+			this::injectPlannerTimeout,
+			this::isDegraded,
+			() -> activeGoal().map(goal -> goal.type() == GoalType.FOLLOW_PLAYER && "DegradedAlice".equals(goal.targetPlayer())).orElse(false),
+			() -> behaviorTreeSnapshot().activeNodePath() != null && !behaviorTreeSnapshot().activeNodePath().isEmpty(),
+			() -> onChatReceived("DegradedAlice", "@agent reset"),
+			() -> !isDegraded()
+		));
+		verificationRunner.register(new FollowReacquireTargetVerification(
+			() -> sessionSnapshot.worldLoaded(),
+			() -> nearbyPlayerTracker.injectPlayerNearby("ReacquireAlice", playerOffset(5.0D), tickCount, eventBuffer),
+			() -> eventBuffer.latestSeqNo(),
+			() -> injectMockPlannerResponse(new PlannerResponse(
+				"Following ReacquireAlice.",
+				new PlannerIntent("set_goal", GoalType.FOLLOW_PLAYER, "ReacquireAlice")
+			)),
+			() -> onChatReceived("ReacquireAlice", "@agent follow me"),
+			sinceSeqNo -> eventBuffer.containsTypeForPlayerSince(sinceSeqNo, "follow.target_acquired", "ReacquireAlice"),
+			() -> nearbyPlayerTracker.injectPlayerDisconnect("ReacquireAlice", tickCount, eventBuffer),
+			sinceSeqNo -> eventBuffer.containsTypeForPlayerSince(sinceSeqNo, "follow.target_lost", "ReacquireAlice"),
+			() -> activeGoal().isEmpty(),
+			() -> nearbyPlayerTracker.injectPlayerNearby("ReacquireAlice", playerOffset(5.0D), tickCount, eventBuffer),
+			() -> injectMockPlannerResponse(new PlannerResponse(
+				"Following ReacquireAlice again.",
+				new PlannerIntent("set_goal", GoalType.FOLLOW_PLAYER, "ReacquireAlice")
+			)),
+			() -> onChatReceived("ReacquireAlice", "@agent follow me"),
+			sinceSeqNo -> eventBuffer.containsTypeForPlayerSince(sinceSeqNo, "follow.target_acquired", "ReacquireAlice"),
+			() -> activeGoal().map(goal -> goal.type() == GoalType.FOLLOW_PLAYER && "ReacquireAlice".equals(goal.targetPlayer())).orElse(false)
+		));
+		verificationRunner.register(new PlannerObservabilityVerification(
+			() -> sessionSnapshot.worldLoaded(),
+			() -> nearbyPlayerTracker.injectPlayerNearby("ObserveAlice", playerOffset(5.0D), tickCount, eventBuffer),
+			() -> eventBuffer.latestSeqNo(),
+			() -> injectMockPlannerResponse(new PlannerResponse(
+				"Hi ObserveAlice.",
+				new PlannerIntent("reply_only", null, null)
+			)),
+			() -> onChatReceived("ObserveAlice", "@agent hi"),
+			sinceSeqNo -> eventBuffer.containsTypeSince(sinceSeqNo, "planner.response_applied"),
+			() -> lastDialogueResponse().map(response -> response.intent().type() == DialogueIntentType.REPLY_ONLY).orElse(false),
+			() -> injectMockPlannerResponse(new PlannerResponse(
+				"Following ObserveAlice.",
+				new PlannerIntent("set_goal", GoalType.FOLLOW_PLAYER, "ObserveAlice")
+			)),
+			() -> onChatReceived("ObserveAlice", "@agent follow me"),
+			sinceSeqNo -> eventBuffer.containsTypeSince(sinceSeqNo, "planner.goal_set"),
+			() -> injectMockPlannerResponse(new PlannerResponse(
+				"Stopping.",
+				new PlannerIntent("clear_goal", null, null)
+			)),
+			() -> onChatReceived("ObserveAlice", "@agent stop"),
+			sinceSeqNo -> eventBuffer.containsTypeSince(sinceSeqNo, "planner.goal_cleared")
 		));
 	}
 

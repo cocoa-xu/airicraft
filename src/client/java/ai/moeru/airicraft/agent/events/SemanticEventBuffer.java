@@ -48,6 +48,10 @@ public final class SemanticEventBuffer {
 		return new SemanticEventQueryResult(oldestSeqNo, latestSeqNo, truncated, List.copyOf(matches));
 	}
 
+	public long latestSeqNo() {
+		return events.isEmpty() ? 0L : events.get(events.size() - 1).seqNo();
+	}
+
 	public boolean containsType(String type) {
 		for (SemanticEvent event : events) {
 			if (event.type().equals(type)) {
@@ -55,6 +59,10 @@ public final class SemanticEventBuffer {
 			}
 		}
 		return false;
+	}
+
+	public boolean containsTypeSince(long sinceSeqNo, String type) {
+		return countTypeSince(sinceSeqNo, type) > 0;
 	}
 
 	public boolean containsTypeForPlayer(String type, String playerName) {
@@ -68,6 +76,34 @@ public final class SemanticEventBuffer {
 			}
 		}
 		return false;
+	}
+
+	public boolean containsTypeForPlayerSince(long sinceSeqNo, String type, String playerName) {
+		return countTypeForPlayerSince(sinceSeqNo, type, playerName) > 0;
+	}
+
+	public int countTypeSince(long sinceSeqNo, String type) {
+		int count = 0;
+		for (SemanticEvent event : events) {
+			if (event.seqNo() > sinceSeqNo && event.type().equals(type)) {
+				count++;
+			}
+		}
+		return count;
+	}
+
+	public int countTypeForPlayerSince(long sinceSeqNo, String type, String playerName) {
+		int count = 0;
+		for (SemanticEvent event : events) {
+			if (event.seqNo() <= sinceSeqNo || !event.type().equals(type)) {
+				continue;
+			}
+			Object player = event.payload().get("player");
+			if (playerName.equals(player)) {
+				count++;
+			}
+		}
+		return count;
 	}
 
 	public void clear() {

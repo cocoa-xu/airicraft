@@ -110,3 +110,5 @@
 ## Important Caveat
 - If behavior changes in bridge handlers do not appear in a running dev client, restart `runClient`.
 - A running Minecraft dev process keeps the old classes loaded even if the repo has already been rebuilt.
+- The in-mod verification scenarios are stateful. Running multiple planner/follow scenarios back to back in one client session can produce cross-scenario interference.
+- In particular, `llm.degradation_goal_preserved` intentionally drives the runtime into degraded mode before reset, so later planner/follow scenarios should be run individually or after restarting `runClient`.

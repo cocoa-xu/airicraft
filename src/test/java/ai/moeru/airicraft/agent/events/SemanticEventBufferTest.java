@@ -35,4 +35,19 @@ class SemanticEventBufferTest {
 		assertEquals("session.world_loaded", result.events().get(0).type());
 		assertTrue(!result.truncated());
 	}
+
+	@Test
+	void containsAndCountsSinceFilterByTypeAndPlayer() {
+		SemanticEventBuffer buffer = new SemanticEventBuffer(8);
+		buffer.append(1L, "social.player_spoke", Map.of("player", "Alice"));
+		buffer.append(2L, "social.player_spoke", Map.of("player", "Bob"));
+		buffer.append(3L, "social.player_spoke", Map.of("player", "Alice"));
+		buffer.append(4L, "planner.goal_set", Map.of("player", "Alice"));
+
+		assertEquals(4L, buffer.latestSeqNo());
+		assertTrue(buffer.containsTypeSince(1L, "social.player_spoke"));
+		assertEquals(2, buffer.countTypeSince(1L, "social.player_spoke"));
+		assertTrue(buffer.containsTypeForPlayerSince(1L, "social.player_spoke", "Alice"));
+		assertEquals(1, buffer.countTypeForPlayerSince(1L, "social.player_spoke", "Alice"));
+	}
 }
