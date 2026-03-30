@@ -126,7 +126,7 @@ public final class DialogueRuntime {
 			new DialogueIntent(DialogueIntentType.ACKNOWLEDGE_FAILURE, null, senderName),
 			tick
 		));
-		appendTurn(new DialogueTurn("agent", RESET_MESSAGE, tick));
+		appendTurn(new DialogueTurn(DialogueSpeakerLabels.AGENT, RESET_MESSAGE, tick));
 		return true;
 	}
 
@@ -189,7 +189,7 @@ public final class DialogueRuntime {
 		);
 		recordResponse(response);
 		if (response.text() != null && !response.text().isBlank()) {
-			appendTurn(new DialogueTurn("agent", response.text(), tick));
+			appendTurn(new DialogueTurn(DialogueSpeakerLabels.AGENT, response.text(), tick));
 		}
 		return response;
 	}
@@ -252,7 +252,7 @@ public final class DialogueRuntime {
 				new DialogueIntent(DialogueIntentType.ACKNOWLEDGE_FAILURE, null, null),
 				tick
 			));
-			appendTurn(new DialogueTurn("agent", PARSE_ERROR_MESSAGE, tick));
+			appendTurn(new DialogueTurn(DialogueSpeakerLabels.AGENT, PARSE_ERROR_MESSAGE, tick));
 		}
 
 		if (consecutiveFailureCount >= DEGRADED_FAILURE_THRESHOLD && !degraded) {
@@ -266,7 +266,7 @@ public final class DialogueRuntime {
 				new DialogueIntent(DialogueIntentType.ACKNOWLEDGE_FAILURE, null, null),
 				tick
 			));
-			appendTurn(new DialogueTurn("agent", DEGRADED_MESSAGE, tick));
+			appendTurn(new DialogueTurn(DialogueSpeakerLabels.AGENT, DEGRADED_MESSAGE, tick));
 		}
 	}
 

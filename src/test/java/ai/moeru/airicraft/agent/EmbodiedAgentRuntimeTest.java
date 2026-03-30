@@ -45,4 +45,11 @@ class EmbodiedAgentRuntimeTest {
 			100L
 		));
 	}
+
+	@Test
+	void detectsLocalControllerMessagesByMatchingClientPlayerName() {
+		assertTrue(EmbodiedAgentRuntime.isLocalControllerMessage("Player918", "Player918"));
+		assertFalse(EmbodiedAgentRuntime.isLocalControllerMessage("magpie", "Player918"));
+		assertFalse(EmbodiedAgentRuntime.isLocalControllerMessage(null, "Player918"));
+	}
 }

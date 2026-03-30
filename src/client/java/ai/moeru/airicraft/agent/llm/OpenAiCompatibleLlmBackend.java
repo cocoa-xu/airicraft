@@ -2,6 +2,7 @@ package ai.moeru.airicraft.agent.llm;
 
 import ai.moeru.airicraft.Airicraft;
 import ai.moeru.airicraft.agent.AgentConfig;
+import ai.moeru.airicraft.agent.dialogue.DialogueSpeakerLabels;
 import ai.moeru.airicraft.agent.dialogue.DialogueTurn;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
@@ -28,6 +29,7 @@ import java.util.concurrent.TimeoutException;
 
 public final class OpenAiCompatibleLlmBackend implements LlmBackend {
 	private static final Gson GSON = new Gson();
+	// TODO: extract prompt to standalone config file
 	private static final String SYSTEM_PROMPT = """
 		You are the planner for a Minecraft companion. Return strict JSON with:
 		{
@@ -45,13 +47,15 @@ public final class OpenAiCompatibleLlmBackend implements LlmBackend {
 		Only choose FOLLOW_PLAYER when the player explicitly asks the companion to follow.
 		If you need visual information, return toolRequest and set replyText to "" and intent.type to "none".
 		When a tool result is already present in the prompt, do not request another tool.
+		If a message comes from "%s", it is not another in-world player. It is the developer/admin on the very same client you run on, and they share controls with you.
+		Treat messages from "%s" as operator instructions and high-priority local guidance.
 		replyText must be a single plain Minecraft chat line.
 		Keep replyText under 160 characters.
 		Do not use markdown, code fences, bullet lists, decorative formatting, or multi-line text.
 		Plain text is preferred. A light kaomoji or a single simple emoji is acceptable, but keep it sparse.
 		Do not start replyText with a slash.
 		Do not claim capabilities the companion does not actually have.
-		""";
+		""".formatted(DialogueSpeakerLabels.SAME_CLIENT_ADMIN, DialogueSpeakerLabels.SAME_CLIENT_ADMIN);
 
 	private final AgentConfig.LlmConfig config;
 	private final HttpClient httpClient = HttpClient.newHttpClient();
@@ -175,7 +179,11 @@ public final class OpenAiCompatibleLlmBackend implements LlmBackend {
 		for (DialogueTurn turn : request.recentTurns()) {
 			builder.append("- ").append(turn.speaker()).append(": ").append(turn.text()).append('\n');
 		}
-		builder.append("Latest player message from ").append(request.senderName()).append(": ").append(request.message()).append('\n');
+		// TODO: Improve prompt construction, ask a human to do this.
+		if (DialogueSpeakerLabels.isSameClientAdmin(request.senderName())) {
+			builder.append("Latest message is from the developer/admin on this same client with you.\n");
+		}
+		builder.append("Latest message from ").append(request.senderName()).append(": ").append(request.message()).append('\n');
 		builder.append("Tool result: ");
 		if (request.toolResult() == null || request.toolResult().isBlank()) {
 			builder.append("none");

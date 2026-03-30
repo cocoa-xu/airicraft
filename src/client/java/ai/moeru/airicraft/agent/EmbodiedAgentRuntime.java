@@ -9,6 +9,7 @@ import ai.moeru.airicraft.agent.behavior.BehaviorTreeSnapshot;
 import ai.moeru.airicraft.agent.chat.ChatService;
 import ai.moeru.airicraft.agent.dialogue.DialogueIntentType;
 import ai.moeru.airicraft.agent.dialogue.DialogueResponse;
+import ai.moeru.airicraft.agent.dialogue.DialogueSpeakerLabels;
 import ai.moeru.airicraft.agent.dialogue.DialogueSnapshot;
 import ai.moeru.airicraft.agent.dialogue.DialogueRuntime;
 import ai.moeru.airicraft.agent.events.SemanticEventBuffer;
@@ -304,6 +305,28 @@ public final class EmbodiedAgentRuntime {
 		)) {
 			return;
 		}
+		if (isLocalControllerMessage(senderName, localPlayerName())) {
+			eventBuffer.append(tickCount, "social.local_controller_spoke", Map.of(
+				"player", senderName,
+				"message", plainTextMessage,
+				"normalizedMessage", ChatIngestService.normalize(plainTextMessage)
+			));
+
+			String plannerSender = DialogueSpeakerLabels.SAME_CLIENT_ADMIN;
+			if (dialogueRuntime.handleResetCommand(plannerSender, plainTextMessage, tickCount, eventBuffer)) {
+				return;
+			}
+
+			dialogueRuntime.onPlayerChat(
+				plannerSender,
+				plainTextMessage,
+				tickCount,
+				sessionSnapshot,
+				primaryInteractionResolver.current().map(PrimaryInteractionPlayer::name).orElse(null),
+				goalDirector.activeGoal()
+			);
+			return;
+		}
 
 		chatIngestService.ingest(
 			senderName,
@@ -485,6 +508,13 @@ public final class EmbodiedAgentRuntime {
 			return false;
 		}
 		return currentTick - lastAgentChatTick <= CHAT_ECHO_SUPPRESSION_TICKS;
+	}
+
+	static boolean isLocalControllerMessage(String senderName, String localPlayerName) {
+		if (senderName == null || localPlayerName == null) {
+			return false;
+		}
+		return senderName.equals(localPlayerName);
 	}
 
 	private boolean isDuplicateSystemChat(String plainTextMessage, long currentTick) {
