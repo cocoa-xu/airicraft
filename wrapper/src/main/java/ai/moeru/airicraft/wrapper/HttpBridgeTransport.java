@@ -19,6 +19,7 @@ final class HttpBridgeTransport implements MinecraftTransport {
 	private static final Duration DEFAULT_REQUEST_TIMEOUT = Duration.ofSeconds(2);
 	private static final Duration JOIN_REQUEST_TIMEOUT = Duration.ofSeconds(15);
 	private static final Duration SCREENSHOT_REQUEST_TIMEOUT = Duration.ofSeconds(10);
+	private static final Duration VISION_REQUEST_TIMEOUT = Duration.ofSeconds(20);
 	private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 	private static final TypeReference<LinkedHashMap<String, Object>> MAP_TYPE = new TypeReference<>() {
 	};
@@ -75,6 +76,21 @@ final class HttpBridgeTransport implements MinecraftTransport {
 		catch (IllegalArgumentException exception) {
 			throw new BridgeUnavailableException("bridge_io_error", "Bridge returned an invalid screenshot payload");
 		}
+	}
+
+	@Override
+	public VisionDescriptionResult describeVision(String prompt) {
+		Map<String, Object> payload = send(
+			"POST",
+			"/v1/vision/describe",
+			prompt == null || prompt.isBlank() ? null : Map.of("prompt", prompt)
+		);
+		return new VisionDescriptionResult(
+			requiredString(payload, "format"),
+			requiredLong(payload, "capturedAtMs"),
+			requiredString(payload, "model"),
+			requiredString(payload, "description")
+		);
 	}
 
 	@Override
@@ -228,6 +244,7 @@ final class HttpBridgeTransport implements MinecraftTransport {
 	private static Duration requestTimeout(String path) {
 		return switch (path) {
 			case "/v1/camera/screenshot" -> SCREENSHOT_REQUEST_TIMEOUT;
+			case "/v1/vision/describe" -> VISION_REQUEST_TIMEOUT;
 			case "/v1/worlds/join", "/v1/servers/join" -> JOIN_REQUEST_TIMEOUT;
 			default -> DEFAULT_REQUEST_TIMEOUT;
 		};

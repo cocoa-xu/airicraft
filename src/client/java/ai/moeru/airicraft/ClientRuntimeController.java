@@ -6,8 +6,8 @@ import net.minecraft.client.MinecraftClient;
 
 public final class ClientRuntimeController {
 	private final HighlightManager highlightManager = new HighlightManager();
-	private final EmbodiedAgentRuntime agentRuntime = EmbodiedAgentRuntime.createDefault();
 	private final FirstPersonScreenshotService screenshotService = new FirstPersonScreenshotService();
+	private final EmbodiedAgentRuntime agentRuntime = EmbodiedAgentRuntime.createDefault(screenshotService);
 	private final ModBridgeServer bridgeServer = new ModBridgeServer(highlightManager, agentRuntime, screenshotService);
 
 	public HighlightManager highlightManager() {

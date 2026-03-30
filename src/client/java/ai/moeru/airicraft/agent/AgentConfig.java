@@ -13,18 +13,28 @@ public record AgentConfig(
 		String providerBaseUrl,
 		String apiKey,
 		String model,
+		String visionProviderBaseUrl,
+		String visionApiKey,
+		String visionModel,
 		int requestTimeoutMillis,
+		int visionRequestTimeoutMillis,
 		int maxRecentConversationTurns,
-		boolean enableProactiveSocialMode
+		boolean enableProactiveSocialMode,
+		String visionImageDetail
 	) {
 		public static LlmConfig defaults() {
 			return new LlmConfig(
 				"https://api.openai.com/v1",
 				"",
 				"",
+				"https://api.openai.com/v1",
+				"",
+				"",
 				15_000,
+				10_000,
 				8,
-				false
+				false,
+				"low"
 			);
 		}
 
@@ -35,6 +45,15 @@ public record AgentConfig(
 				&& !apiKey.isBlank()
 				&& model != null
 				&& !model.isBlank();
+		}
+
+		public boolean visionConfigured() {
+			return visionProviderBaseUrl != null
+				&& !visionProviderBaseUrl.isBlank()
+				&& visionApiKey != null
+				&& !visionApiKey.isBlank()
+				&& visionModel != null
+				&& !visionModel.isBlank();
 		}
 	}
 }

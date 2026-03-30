@@ -160,6 +160,37 @@ class AiricraftCliMainTest {
 		assertTrue(result.output().contains("error_code: capture_timeout\n"));
 	}
 
+	@Test
+	void visionDescribePrintsDeterministicText() {
+		TestTransport transport = new TestTransport();
+		transport.visionDescriptionResult = new VisionDescriptionResult(
+			"text",
+			987654321L,
+			"gpt-4.1-mini",
+			"A birch forest hill with open sky and no visible structures."
+		);
+
+		CliResult result = execute(transport, "vision", "describe");
+
+		assertEquals(0, result.exitCode());
+		assertTrue(result.output().contains("status: ok\n"));
+		assertTrue(result.output().contains("command: vision describe\n"));
+		assertTrue(result.output().contains("format: text\n"));
+		assertTrue(result.output().contains("capturedAtMs: 987654321\n"));
+		assertTrue(result.output().contains("model: gpt-4.1-mini\n"));
+		assertTrue(result.output().contains("description: A birch forest hill with open sky and no visible structures.\n"));
+	}
+
+	@Test
+	void visionDescribePassesPromptOverride() {
+		TestTransport transport = new TestTransport();
+
+		CliResult result = execute(transport, "vision", "describe", "--prompt", "Describe hazards only.");
+
+		assertEquals(0, result.exitCode());
+		assertEquals("Describe hazards only.", transport.lastVisionPrompt);
+	}
+
 	private static CliResult execute(MinecraftTransport transport, String... args) {
 		StringWriter writer = new StringWriter();
 		CommandLine commandLine = AiricraftCliMain.createCommandLine(transport, new PrintWriter(writer, true));
@@ -193,6 +224,8 @@ class AiricraftCliMainTest {
 		private Map<String, Object> serversJoinPayload = Map.of("started", true);
 		private Map<String, Object> lookAtPayload = Map.of("started", true);
 		private CapturedImage capturedImage = new CapturedImage(new byte[0], "png", 854, 480, 854, 480, 1L);
+		private VisionDescriptionResult visionDescriptionResult = new VisionDescriptionResult("text", 1L, "gpt-4.1-mini", "desc");
+		private String lastVisionPrompt;
 
 		private RuntimeException worldsJoinFailure;
 		private RuntimeException serversListFailure;
@@ -219,6 +252,12 @@ class AiricraftCliMainTest {
 				throw captureScreenshotFailure;
 			}
 			return capturedImage;
+		}
+
+		@Override
+		public VisionDescriptionResult describeVision(String prompt) {
+			lastVisionPrompt = prompt;
+			return visionDescriptionResult;
 		}
 
 		@Override

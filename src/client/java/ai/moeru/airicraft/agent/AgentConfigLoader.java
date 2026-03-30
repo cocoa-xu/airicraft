@@ -47,22 +47,30 @@ public final class AgentConfigLoader {
 			}
 
 			try (Reader fileReader = Files.newBufferedReader(configPath, StandardCharsets.UTF_8)) {
-				Map<String, Object> root = parseYaml(fileReader);
-				AgentConfig.LlmConfig llm = new AgentConfig.LlmConfig(
-					readString(root, "providerBaseUrl", defaults.llm().providerBaseUrl()),
-					readString(root, "apiKey", defaults.llm().apiKey()),
-					readString(root, "model", defaults.llm().model()),
-					readInt(root, "requestTimeoutMillis", defaults.llm().requestTimeoutMillis()),
-					readInt(root, "maxRecentConversationTurns", defaults.llm().maxRecentConversationTurns()),
-					readBoolean(root, "enableProactiveSocialMode", defaults.llm().enableProactiveSocialMode())
-				);
-				return new AgentConfig(defaults.verificationEnabled(), defaults.verificationAutoRunAll(), llm);
+				return fromMap(parseYaml(fileReader), defaults);
 			}
 		}
 		catch (IOException | JsonParseException exception) {
 			Airicraft.LOGGER.warn("Failed to load Airicraft agent config; using defaults", exception);
 			return defaults;
 		}
+	}
+
+	static AgentConfig fromMap(Map<String, Object> root, AgentConfig defaults) {
+		AgentConfig.LlmConfig llm = new AgentConfig.LlmConfig(
+			readString(root, "providerBaseUrl", defaults.llm().providerBaseUrl()),
+			readString(root, "apiKey", defaults.llm().apiKey()),
+			readString(root, "model", defaults.llm().model()),
+			readString(root, "visionProviderBaseUrl", defaults.llm().visionProviderBaseUrl()),
+			readString(root, "visionApiKey", defaults.llm().visionApiKey()),
+			readString(root, "visionModel", defaults.llm().visionModel()),
+			readInt(root, "requestTimeoutMillis", defaults.llm().requestTimeoutMillis()),
+			readInt(root, "visionRequestTimeoutMillis", defaults.llm().visionRequestTimeoutMillis()),
+			readInt(root, "maxRecentConversationTurns", defaults.llm().maxRecentConversationTurns()),
+			readBoolean(root, "enableProactiveSocialMode", defaults.llm().enableProactiveSocialMode()),
+			readString(root, "visionImageDetail", defaults.llm().visionImageDetail())
+		);
+		return new AgentConfig(defaults.verificationEnabled(), defaults.verificationAutoRunAll(), llm);
 	}
 
 	private static void ensureFile(Path path) throws IOException {
@@ -104,9 +112,14 @@ public final class AgentConfigLoader {
 		yamlData.put("providerBaseUrl", readString(root, "providerBaseUrl", defaults.llm().providerBaseUrl()));
 		yamlData.put("apiKey", readString(root, "apiKey", defaults.llm().apiKey()));
 		yamlData.put("model", readString(root, "model", defaults.llm().model()));
+		yamlData.put("visionProviderBaseUrl", readString(root, "visionProviderBaseUrl", defaults.llm().visionProviderBaseUrl()));
+		yamlData.put("visionApiKey", readString(root, "visionApiKey", defaults.llm().visionApiKey()));
+		yamlData.put("visionModel", readString(root, "visionModel", defaults.llm().visionModel()));
 		yamlData.put("requestTimeoutMillis", readInt(root, "requestTimeoutMillis", defaults.llm().requestTimeoutMillis()));
+		yamlData.put("visionRequestTimeoutMillis", readInt(root, "visionRequestTimeoutMillis", defaults.llm().visionRequestTimeoutMillis()));
 		yamlData.put("maxRecentConversationTurns", readInt(root, "maxRecentConversationTurns", defaults.llm().maxRecentConversationTurns()));
 		yamlData.put("enableProactiveSocialMode", readBoolean(root, "enableProactiveSocialMode", defaults.llm().enableProactiveSocialMode()));
+		yamlData.put("visionImageDetail", readString(root, "visionImageDetail", defaults.llm().visionImageDetail()));
 		Files.writeString(yamlConfigPath, dumpYaml(yamlData), StandardCharsets.UTF_8);
 	}
 

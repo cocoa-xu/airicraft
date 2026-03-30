@@ -1,5 +1,6 @@
 package ai.moeru.airicraft.agent;
 
+import ai.moeru.airicraft.FirstPersonScreenshotService;
 import ai.moeru.airicraft.SingleplayerWorldService;
 import ai.moeru.airicraft.agent.behavior.BehaviorTreeRuntime;
 import ai.moeru.airicraft.agent.behavior.BehaviorTreeSnapshot;
@@ -15,10 +16,15 @@ import ai.moeru.airicraft.agent.follow.FollowState;
 import ai.moeru.airicraft.agent.goals.GoalDirector;
 import ai.moeru.airicraft.agent.goals.GoalSnapshot;
 import ai.moeru.airicraft.agent.goals.GoalType;
+import ai.moeru.airicraft.agent.llm.CurrentViewVisionService;
+import ai.moeru.airicraft.agent.llm.LlmBackendException;
 import ai.moeru.airicraft.agent.llm.OpenAiCompatibleLlmBackend;
+import ai.moeru.airicraft.agent.llm.OpenAiCompatibleVisionBackend;
 import ai.moeru.airicraft.agent.llm.PlannerExecutor;
 import ai.moeru.airicraft.agent.llm.PlannerIntent;
+import ai.moeru.airicraft.agent.llm.PlannerOrchestrator;
 import ai.moeru.airicraft.agent.llm.PlannerResponse;
+import ai.moeru.airicraft.agent.llm.VisionDescription;
 import ai.moeru.airicraft.agent.session.LanHostingService;
 import ai.moeru.airicraft.agent.session.SessionSnapshot;
 import ai.moeru.airicraft.agent.session.SessionRuntime;
@@ -65,6 +71,7 @@ public final class EmbodiedAgentRuntime {
 	private final FollowCapability followCapability = new FollowCapability();
 	private final BehaviorTreeRuntime behaviorTreeRuntime = new BehaviorTreeRuntime();
 	private final ChatService chatService = new ChatService();
+	private final CurrentViewVisionService visionService;
 	private final DialogueRuntime dialogueRuntime;
 
 	private boolean initialized;
@@ -74,17 +81,25 @@ public final class EmbodiedAgentRuntime {
 	private SessionSnapshot sessionSnapshot = SessionSnapshot.initial();
 	private FollowState followState = FollowState.idle();
 
-	public EmbodiedAgentRuntime(AgentConfig config) {
+	public EmbodiedAgentRuntime(AgentConfig config, FirstPersonScreenshotService screenshotService) {
 		this.config = Objects.requireNonNull(config, "config");
+		this.visionService = new CurrentViewVisionService(
+			Objects.requireNonNull(screenshotService, "screenshotService"),
+			new OpenAiCompatibleVisionBackend(config.llm()),
+			MinecraftClient::getInstance
+		);
 		this.dialogueRuntime = new DialogueRuntime(
-			new PlannerExecutor(new OpenAiCompatibleLlmBackend(config.llm())),
+			new PlannerOrchestrator(
+				new PlannerExecutor(new OpenAiCompatibleLlmBackend(config.llm())),
+				visionService
+			),
 			config.llm().maxRecentConversationTurns()
 		);
 		registerDefaultScenarios();
 	}
 
-	public static EmbodiedAgentRuntime createDefault() {
-		return new EmbodiedAgentRuntime(AgentConfigLoader.load());
+	public static EmbodiedAgentRuntime createDefault(FirstPersonScreenshotService screenshotService) {
+		return new EmbodiedAgentRuntime(AgentConfigLoader.load(), screenshotService);
 	}
 
 	public AgentConfig config() {
@@ -188,6 +203,7 @@ public final class EmbodiedAgentRuntime {
 		eventBuffer.clear();
 		primaryInteractionResolver.clear();
 		dialogueRuntime.shutdown();
+		visionService.shutdown();
 		goalDirector.clear();
 		followCapability.clear();
 		followState = FollowState.idle();
@@ -232,6 +248,10 @@ public final class EmbodiedAgentRuntime {
 
 	public boolean llmAvailable() {
 		return dialogueRuntime.llmAvailable();
+	}
+
+	public boolean visionAvailable() {
+		return visionService.isConfigured();
 	}
 
 	public boolean isDegraded() {
@@ -301,6 +321,10 @@ public final class EmbodiedAgentRuntime {
 
 	public void injectPlannerTimeout() {
 		dialogueRuntime.injectTimeout();
+	}
+
+	public VisionDescription describeCapturedView(FirstPersonScreenshotService.CapturedScreenshot screenshot, String prompt) throws LlmBackendException {
+		return visionService.describe(screenshot, prompt);
 	}
 
 	private boolean proactiveSocialModeEnabled() {

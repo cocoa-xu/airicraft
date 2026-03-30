@@ -1,6 +1,8 @@
 package ai.moeru.airicraft;
 
 import ai.moeru.airicraft.agent.EmbodiedAgentRuntime;
+import ai.moeru.airicraft.agent.llm.CurrentViewVisionService;
+import ai.moeru.airicraft.agent.llm.LlmBackendException;
 import ai.moeru.airicraft.agent.session.LanHostingService;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
@@ -89,6 +91,7 @@ public final class ModBridgeServer {
 			httpServer.createContext("/v1/focus", exchange -> handleJson(exchange, this::createFocusResponse));
 			httpServer.createContext("/v1/world-snapshot", exchange -> handleJson(exchange, () -> createWorldSnapshotResponse(exchange)));
 			httpServer.createContext("/v1/camera/screenshot", this::handleCameraScreenshot);
+			httpServer.createContext("/v1/vision/describe", this::handleVisionDescribe);
 			httpServer.createContext("/v1/player/look-at", this::handlePlayerLookAt);
 			httpServer.createContext("/v1/highlights", this::handleHighlights);
 			httpServer.createContext("/v1/agent/status", exchange -> handleJson(exchange, this::createAgentStatusResponse));
@@ -233,6 +236,24 @@ public final class ModBridgeServer {
 			Airicraft.LOGGER.warn("Bridge request failed", exception);
 			writeJson(exchange, 500, Map.of("error", "internal_error", "message", exception.getMessage()));
 		}
+	}
+
+	private void handleVisionDescribe(HttpExchange exchange) throws IOException {
+		handleJsonBody(exchange, "POST", VisionDescribeRequest.class, request -> {
+			String prompt = request == null ? null : request.prompt();
+			CompletableFuture<FirstPersonScreenshotService.CapturedScreenshot> captureFuture = onClientThread(() -> {
+				var client = getClient();
+				ensureWorldLoaded(client);
+				return screenshotService.requestCapture(client);
+			});
+			FirstPersonScreenshotService.CapturedScreenshot screenshot = awaitCameraScreenshot(captureFuture);
+			try {
+				return visionDescribePayload(agentRuntime.describeCapturedView(screenshot, prompt));
+			}
+			catch (LlmBackendException exception) {
+				throw visionBridgeException(exception);
+			}
+		});
 	}
 
 	private void handleHighlights(HttpExchange exchange) throws IOException {
@@ -443,6 +464,24 @@ public final class ModBridgeServer {
 		return payload;
 	}
 
+	private static Map<String, Object> visionDescribePayload(ai.moeru.airicraft.agent.llm.VisionDescription description) {
+		Map<String, Object> payload = new LinkedHashMap<>();
+		payload.put("format", "text");
+		payload.put("capturedAtMs", description.capturedAtMs());
+		payload.put("model", description.model());
+		payload.put("description", description.text());
+		return payload;
+	}
+
+	private static BridgeUnavailableException visionBridgeException(LlmBackendException exception) {
+		String code = switch (exception.failureType()) {
+			case PROVIDER_UNAVAILABLE -> "vision_provider_unavailable";
+			case TIMEOUT -> "vision_timeout";
+			case PROVIDER_ERROR, PARSE_ERROR -> "vision_failed";
+		};
+		return new BridgeUnavailableException(code, exception.getMessage());
+	}
+
 	private Object createAgentStatusResponse() {
 		return onClientThread(() -> {
 			var snapshot = agentRuntime.snapshot();
@@ -454,6 +493,7 @@ public final class ModBridgeServer {
 			response.put("tickCount", snapshot.tickCount());
 			response.put("session", snapshot.session());
 			response.put("llmAvailable", agentRuntime.llmAvailable());
+			response.put("visionAvailable", agentRuntime.visionAvailable());
 			response.put("degraded", agentRuntime.isDegraded());
 			response.put("verification", snapshot.verification());
 			return response;
@@ -941,6 +981,9 @@ public final class ModBridgeServer {
 	}
 
 	private record VerificationRunRequest(String scenario) {
+	}
+
+	private record VisionDescribeRequest(String prompt) {
 	}
 
 }

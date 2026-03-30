@@ -1,5 +1,6 @@
 package ai.moeru.airicraft.agent.llm;
 
+import ai.moeru.airicraft.Airicraft;
 import ai.moeru.airicraft.agent.AgentConfig;
 import ai.moeru.airicraft.agent.dialogue.DialogueTurn;
 import com.google.gson.Gson;
@@ -35,9 +36,15 @@ public final class OpenAiCompatibleLlmBackend implements LlmBackend {
 		    "type": "set_goal" | "clear_goal" | "reply_only" | "ask_clarification" | "acknowledge_failure" | "none",
 		    "goalType": "FOLLOW_PLAYER" | null,
 		    "targetPlayer": string | null
-		  }
+		  },
+		  "toolRequest": {
+		    "type": "describe_current_view",
+		    "prompt": string
+		  } | null
 		}
 		Only choose FOLLOW_PLAYER when the player explicitly asks the companion to follow.
+		If you need visual information, return toolRequest and set replyText to "" and intent.type to "none".
+		When a tool result is already present in the prompt, do not request another tool.
 		replyText must be a single plain Minecraft chat line.
 		Keep replyText under 160 characters.
 		Do not use markdown, code fences, bullet lists, decorative formatting, or multi-line text.
@@ -70,7 +77,16 @@ public final class OpenAiCompatibleLlmBackend implements LlmBackend {
 			throw new LlmBackendException(LlmFailureType.PROVIDER_UNAVAILABLE, "LLM provider is not configured");
 		}
 
-		String requestBody = GSON.toJson(buildRequestPayload(request));
+		String prompt = renderPrompt(request);
+		String requestBody = GSON.toJson(buildRequestPayload(prompt));
+		Airicraft.LOGGER.info(
+			"Planner request model={} sender={} turns={} toolResultPresent={} prompt={}",
+			config.model(),
+			request.senderName(),
+			request.recentTurns().size(),
+			request.toolResult() != null && !request.toolResult().isBlank(),
+			summarizeForLog(prompt)
+		);
 		HttpRequest httpRequest = HttpRequest.newBuilder()
 			.uri(buildUri())
 			.timeout(Duration.ofMillis(config.requestTimeoutMillis()))
@@ -81,6 +97,12 @@ public final class OpenAiCompatibleLlmBackend implements LlmBackend {
 
 		try {
 			HttpResponse<String> response = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+			Airicraft.LOGGER.info(
+				"Planner response model={} status={} body={}",
+				config.model(),
+				response.statusCode(),
+				summarizeForLog(response.body())
+			);
 			if (response.statusCode() >= 400) {
 				throw new LlmBackendException(LlmFailureType.PROVIDER_ERROR, "Provider returned HTTP " + response.statusCode());
 			}
@@ -126,13 +148,13 @@ public final class OpenAiCompatibleLlmBackend implements LlmBackend {
 		}
 	}
 
-	private Map<String, Object> buildRequestPayload(PlannerRequest request) {
+	private Map<String, Object> buildRequestPayload(String prompt) {
 		return Map.of(
 			"model", config.model(),
 			"response_format", Map.of("type", "json_object"),
 			"messages", List.of(
 				Map.of("role", "system", "content", SYSTEM_PROMPT),
-				Map.of("role", "user", "content", renderPrompt(request))
+				Map.of("role", "user", "content", prompt)
 			)
 		);
 	}
@@ -154,6 +176,14 @@ public final class OpenAiCompatibleLlmBackend implements LlmBackend {
 			builder.append("- ").append(turn.speaker()).append(": ").append(turn.text()).append('\n');
 		}
 		builder.append("Latest player message from ").append(request.senderName()).append(": ").append(request.message()).append('\n');
+		builder.append("Tool result: ");
+		if (request.toolResult() == null || request.toolResult().isBlank()) {
+			builder.append("none");
+		}
+		else {
+			builder.append(request.toolResult());
+		}
+		builder.append('\n');
 		builder.append("Decide whether to set or clear a goal, and provide a concise plain-text reply that is safe to send in Minecraft chat.");
 		return builder.toString();
 	}
@@ -171,12 +201,15 @@ public final class OpenAiCompatibleLlmBackend implements LlmBackend {
 				throw new JsonParseException("Missing message");
 			}
 
-			String content = extractContent(message.get("content"));
+			String content = OpenAiCompatibleMessageContent.extract(message.get("content"));
 			JsonObject payload = JsonParser.parseString(content).getAsJsonObject();
 			String replyText = getString(payload, "replyText").orElse("");
 			JsonObject intentObject = payload.has("intent") && payload.get("intent").isJsonObject()
 				? payload.getAsJsonObject("intent")
 				: new JsonObject();
+			JsonObject toolRequestObject = payload.has("toolRequest") && payload.get("toolRequest").isJsonObject()
+				? payload.getAsJsonObject("toolRequest")
+				: null;
 
 			PlannerIntent intent = new PlannerIntent(
 				getString(intentObject, "type").orElse("none").toLowerCase(Locale.ROOT),
@@ -185,34 +218,27 @@ public final class OpenAiCompatibleLlmBackend implements LlmBackend {
 					.orElse(null),
 				getString(intentObject, "targetPlayer").orElse(null)
 			);
-			return new PlannerResponse(replyText, intent);
+			PlannerToolRequest toolRequest = toolRequestObject == null
+				? null
+				: new PlannerToolRequest(
+					getString(toolRequestObject, "type").orElse(null),
+					getString(toolRequestObject, "prompt").orElse(null)
+				);
+			Airicraft.LOGGER.info(
+				"Planner parsed response intentType={} goalType={} targetPlayer={} replyText={} toolRequestType={} toolPrompt={}",
+				intent.type(),
+				intent.goalType(),
+				intent.targetPlayer(),
+				summarizeForLog(replyText),
+				toolRequest == null ? null : toolRequest.type(),
+				toolRequest == null ? null : summarizeForLog(toolRequest.prompt())
+			);
+			return new PlannerResponse(replyText, intent, toolRequest);
 		}
 		catch (IllegalArgumentException | JsonParseException exception) {
+			Airicraft.LOGGER.warn("Failed to parse planner response body={}", summarizeForLog(responseBody), exception);
 			throw new LlmBackendException(LlmFailureType.PARSE_ERROR, "Failed to parse planner response", exception);
 		}
-	}
-
-	private static String extractContent(JsonElement contentElement) {
-		if (contentElement == null || contentElement.isJsonNull()) {
-			return "";
-		}
-		if (contentElement.isJsonPrimitive()) {
-			return contentElement.getAsString();
-		}
-		if (contentElement.isJsonArray()) {
-			StringBuilder builder = new StringBuilder();
-			for (JsonElement part : contentElement.getAsJsonArray()) {
-				if (!part.isJsonObject()) {
-					continue;
-				}
-				JsonObject object = part.getAsJsonObject();
-				if (object.has("text")) {
-					builder.append(object.get("text").getAsString());
-				}
-			}
-			return builder.toString();
-		}
-		return contentElement.toString();
 	}
 
 	private static Optional<String> getString(JsonObject object, String fieldName) {
@@ -225,5 +251,19 @@ public final class OpenAiCompatibleLlmBackend implements LlmBackend {
 
 	private static String nullToEmpty(String value) {
 		return value == null ? "" : value;
+	}
+
+	private static String summarizeForLog(String text) {
+		if (text == null) {
+			return "";
+		}
+		String normalized = text
+			.replace("\\", "\\\\")
+			.replace("\r", "\\r")
+			.replace("\n", "\\n");
+		if (normalized.length() > 1200) {
+			return normalized.substring(0, 1200) + "...";
+		}
+		return normalized;
 	}
 }

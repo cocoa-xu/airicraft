@@ -145,6 +145,52 @@ class HttpBridgeTransportTest {
 		}
 	}
 
+	@Test
+	void describeVisionParsesTextPayload(@TempDir Path tempDir) throws Exception {
+		try (TestBridgeServer server = TestBridgeServer.start()) {
+			server.respondJson("/v1/vision/describe", 0, 200, """
+				{
+				  "format":"text",
+				  "capturedAtMs":123,
+				  "model":"gpt-4.1-mini",
+				  "description":"A grassy hill under open sky."
+				}
+				""");
+			writeBridgeState(tempDir, server.port());
+			System.setProperty("user.home", tempDir.toString());
+
+			HttpBridgeTransport transport = new HttpBridgeTransport();
+			VisionDescriptionResult result = transport.describeVision("Describe the scene.");
+
+			assertEquals("text", result.format());
+			assertEquals(123L, result.capturedAtMs());
+			assertEquals("gpt-4.1-mini", result.model());
+			assertEquals("A grassy hill under open sky.", result.description());
+		}
+	}
+
+	@Test
+	void describeVisionUsesLongerTimeout(@TempDir Path tempDir) throws Exception {
+		try (TestBridgeServer server = TestBridgeServer.start()) {
+			server.respondJson("/v1/vision/describe", 2500, 200, """
+				{
+				  "format":"text",
+				  "capturedAtMs":1,
+				  "model":"gpt-4.1-mini",
+				  "description":"ok"
+				}
+				""");
+			writeBridgeState(tempDir, server.port());
+			System.setProperty("user.home", tempDir.toString());
+
+			HttpBridgeTransport transport = new HttpBridgeTransport();
+			VisionDescriptionResult result = transport.describeVision(null);
+
+			assertEquals("text", result.format());
+			assertEquals(1, server.requestCount("/v1/vision/describe"));
+		}
+	}
+
 	private static void writeBridgeState(Path tempDir) throws Exception {
 		writeBridgeState(tempDir, 1);
 	}

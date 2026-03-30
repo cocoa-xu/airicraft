@@ -11,6 +11,8 @@ interface MinecraftTransport {
 
 	CapturedImage captureScreenshot();
 
+	VisionDescriptionResult describeVision(String prompt);
+
 	Map<String, Object> listWorlds();
 
 	Map<String, Object> joinWorld(String worldId);

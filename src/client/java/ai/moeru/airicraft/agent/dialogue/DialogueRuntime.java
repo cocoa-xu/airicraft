@@ -2,10 +2,12 @@ package ai.moeru.airicraft.agent.dialogue;
 
 import ai.moeru.airicraft.agent.events.SemanticEventBuffer;
 import ai.moeru.airicraft.agent.goals.GoalSnapshot;
+import ai.moeru.airicraft.agent.llm.CurrentViewVisionTool;
 import ai.moeru.airicraft.agent.llm.LlmFailureType;
 import ai.moeru.airicraft.agent.llm.OpenAiCompatibleLlmBackend;
 import ai.moeru.airicraft.agent.llm.PlannerExecutionResult;
 import ai.moeru.airicraft.agent.llm.PlannerExecutor;
+import ai.moeru.airicraft.agent.llm.PlannerOrchestrator;
 import ai.moeru.airicraft.agent.llm.PlannerRequest;
 import ai.moeru.airicraft.agent.llm.PlannerResponse;
 import ai.moeru.airicraft.agent.session.SessionSnapshot;
@@ -22,7 +24,7 @@ public final class DialogueRuntime {
 	private static final String RESET_MESSAGE = "Planner state reset.";
 	private static final String PARSE_ERROR_MESSAGE = "I got confused for a moment.";
 
-	private final PlannerExecutor plannerExecutor;
+	private final PlannerOrchestrator plannerOrchestrator;
 	private final int maxRecentTurns;
 	private final List<DialogueTurn> recentTurns = new ArrayList<>();
 
@@ -35,12 +37,22 @@ public final class DialogueRuntime {
 	private long lastFailureTick = -1L;
 
 	public DialogueRuntime() {
-		this(new PlannerExecutor(new OpenAiCompatibleLlmBackend(ai.moeru.airicraft.agent.AgentConfig.LlmConfig.defaults())), 8);
+		this(
+			new PlannerOrchestrator(
+				new PlannerExecutor(new OpenAiCompatibleLlmBackend(ai.moeru.airicraft.agent.AgentConfig.LlmConfig.defaults())),
+				CurrentViewVisionTool.disabled()
+			),
+			8
+		);
+	}
+
+	public DialogueRuntime(PlannerOrchestrator plannerOrchestrator, int maxRecentTurns) {
+		this.plannerOrchestrator = plannerOrchestrator;
+		this.maxRecentTurns = Math.max(1, maxRecentTurns);
 	}
 
 	public DialogueRuntime(PlannerExecutor plannerExecutor, int maxRecentTurns) {
-		this.plannerExecutor = plannerExecutor;
-		this.maxRecentTurns = Math.max(1, maxRecentTurns);
+		this(new PlannerOrchestrator(plannerExecutor, CurrentViewVisionTool.disabled()), maxRecentTurns);
 	}
 
 	public void recordResponse(DialogueResponse response) {
@@ -65,7 +77,7 @@ public final class DialogueRuntime {
 	}
 
 	public boolean llmAvailable() {
-		return plannerExecutor.isConfigured();
+		return plannerOrchestrator.isConfigured();
 	}
 
 	public long lastFailureTick() {
@@ -92,7 +104,7 @@ public final class DialogueRuntime {
 	}
 
 	public void injectMockResponse(PlannerResponse response) {
-		plannerExecutor.injectMockResponse(response);
+		plannerOrchestrator.injectMockResponse(response);
 	}
 
 	public void injectTimeout() {
@@ -127,29 +139,30 @@ public final class DialogueRuntime {
 		Optional<GoalSnapshot> activeGoal
 	) {
 		appendTurn(new DialogueTurn(senderName, plainTextMessage, tick));
-		if (degraded || plannerExecutor.hasInFlight()) {
+		if (degraded || plannerOrchestrator.hasInFlight()) {
 			return;
 		}
 
-		plannerExecutor.submit(new PlannerRequest(
+		plannerOrchestrator.submit(new PlannerRequest(
 			tick,
 			sessionSnapshot.mode(),
 			primaryInteractionPlayer,
 			activeGoal.orElse(null),
 			List.copyOf(recentTurns),
 			senderName,
-			plainTextMessage
+			plainTextMessage,
+			null
 		));
 	}
 
 	public DialogueResponse poll(long tick, SemanticEventBuffer eventBuffer) {
-		if (queuedTimeoutInjections > 0 && !plannerExecutor.hasInFlight()) {
+		if (queuedTimeoutInjections > 0 && !plannerOrchestrator.hasInFlight()) {
 			queuedTimeoutInjections--;
 			onFailure(LlmFailureType.TIMEOUT, "Injected LLM timeout", tick, eventBuffer);
 			return null;
 		}
 
-		PlannerExecutionResult result = plannerExecutor.poll();
+		PlannerExecutionResult result = plannerOrchestrator.poll();
 		if (result == null) {
 			return null;
 		}
@@ -183,7 +196,7 @@ public final class DialogueRuntime {
 
 	public void resetLlmState(long tick, SemanticEventBuffer eventBuffer) {
 		boolean wasDegraded = degraded;
-		plannerExecutor.reset();
+		plannerOrchestrator.reset();
 		degraded = false;
 		consecutiveFailureCount = 0;
 		queuedTimeoutInjections = 0;
@@ -203,12 +216,12 @@ public final class DialogueRuntime {
 		lastFailureType = null;
 		lastFailureTick = -1L;
 		recentTurns.clear();
-		plannerExecutor.reset();
+		plannerOrchestrator.reset();
 	}
 
 	public void shutdown() {
 		clear();
-		plannerExecutor.shutdown();
+		plannerOrchestrator.shutdown();
 	}
 
 	public static boolean isResetCommand(String plainTextMessage) {

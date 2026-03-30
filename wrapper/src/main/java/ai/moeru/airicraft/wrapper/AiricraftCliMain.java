@@ -65,6 +65,10 @@ public final class AiricraftCliMain {
 		CommandLine camera = root.getSubcommands().get("camera");
 		camera.addSubcommand(new CameraScreenshotCommand(context));
 
+		root.addSubcommand("vision", new UsageCommand(out, "airicraft vision", "Vision analysis commands"));
+		CommandLine vision = root.getSubcommands().get("vision");
+		vision.addSubcommand(new VisionDescribeCommand(context));
+
 		root.addSubcommand("world", new UsageCommand(out, "airicraft world", "World inspection commands"));
 		CommandLine world = root.getSubcommands().get("world");
 		world.addSubcommand(new WorldSnapshotCommand(context));
@@ -288,6 +292,30 @@ public final class AiricraftCliMain {
 			payload.put("height", capture.height());
 			payload.put("capturedAtMs", capture.capturedAtMs());
 			context.printer.printSuccess("camera screenshot", payload);
+			return 0;
+		}
+	}
+
+	@Command(name = "describe", mixinStandardHelpOptions = true, description = "Describe the current first-person view.")
+	private static final class VisionDescribeCommand implements Callable<Integer> {
+		private final CliContext context;
+
+		@Option(names = "--prompt", description = "Custom prompt for the vision model.")
+		private String prompt;
+
+		private VisionDescribeCommand(CliContext context) {
+			this.context = context;
+		}
+
+		@Override
+		public Integer call() {
+			VisionDescriptionResult result = context.transport.describeVision(prompt);
+			LinkedHashMap<String, Object> payload = new LinkedHashMap<>();
+			payload.put("format", result.format());
+			payload.put("capturedAtMs", result.capturedAtMs());
+			payload.put("model", result.model());
+			payload.put("description", result.description());
+			context.printer.printSuccess("vision describe", payload);
 			return 0;
 		}
 	}

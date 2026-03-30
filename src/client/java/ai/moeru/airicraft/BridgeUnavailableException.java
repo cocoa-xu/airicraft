@@ -1,14 +1,14 @@
 package ai.moeru.airicraft;
 
-final class BridgeUnavailableException extends RuntimeException {
+public final class BridgeUnavailableException extends RuntimeException {
 	private final String code;
 
-	BridgeUnavailableException(String code, String message) {
+	public BridgeUnavailableException(String code, String message) {
 		super(message);
 		this.code = code;
 	}
 
-	String code() {
+	public String code() {
 		return code;
 	}
 }

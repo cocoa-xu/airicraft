@@ -13,6 +13,7 @@ public record PlannerRequest(
 	GoalSnapshot activeGoal,
 	List<DialogueTurn> recentTurns,
 	String senderName,
-	String message
+	String message,
+	String toolResult
 ) {
 }
