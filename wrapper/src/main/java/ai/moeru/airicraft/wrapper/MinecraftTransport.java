@@ -9,6 +9,8 @@ interface MinecraftTransport {
 
 	Map<String, Object> getWorldSnapshot(Integer x, Integer y, Integer z, int radius);
 
+	CapturedImage captureScreenshot();
+
 	Map<String, Object> listWorlds();
 
 	Map<String, Object> joinWorld(String worldId);

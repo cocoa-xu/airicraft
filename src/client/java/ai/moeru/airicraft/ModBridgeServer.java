@@ -32,6 +32,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -40,15 +41,18 @@ import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
 public final class ModBridgeServer {
 	private static final Gson GSON = new GsonBuilder().disableHtmlEscaping().create();
 	private static final SecureRandom RANDOM = new SecureRandom();
+	private static final long SCREENSHOT_CAPTURE_TIMEOUT_MILLIS = 5_000L;
 
 	private final HighlightManager highlightManager;
 	private final EmbodiedAgentRuntime agentRuntime;
+	private final FirstPersonScreenshotService screenshotService;
 	private final SingleplayerWorldService singleplayerWorldService = new SingleplayerWorldService();
 	private final SavedServerService savedServerService = new SavedServerService();
 	private final PlayerViewService playerViewService = new PlayerViewService();
@@ -56,9 +60,14 @@ public final class ModBridgeServer {
 	private volatile HttpServer server;
 	private volatile String token;
 
-	public ModBridgeServer(HighlightManager highlightManager, EmbodiedAgentRuntime agentRuntime) {
+	public ModBridgeServer(
+		HighlightManager highlightManager,
+		EmbodiedAgentRuntime agentRuntime,
+		FirstPersonScreenshotService screenshotService
+	) {
 		this.highlightManager = highlightManager;
 		this.agentRuntime = agentRuntime;
+		this.screenshotService = screenshotService;
 	}
 
 	public synchronized void start() {
@@ -79,6 +88,7 @@ public final class ModBridgeServer {
 			httpServer.createContext("/v1/servers/join", this::handleJoinServer);
 			httpServer.createContext("/v1/focus", exchange -> handleJson(exchange, this::createFocusResponse));
 			httpServer.createContext("/v1/world-snapshot", exchange -> handleJson(exchange, () -> createWorldSnapshotResponse(exchange)));
+			httpServer.createContext("/v1/camera/screenshot", this::handleCameraScreenshot);
 			httpServer.createContext("/v1/player/look-at", this::handlePlayerLookAt);
 			httpServer.createContext("/v1/highlights", this::handleHighlights);
 			httpServer.createContext("/v1/agent/status", exchange -> handleJson(exchange, this::createAgentStatusResponse));
@@ -195,6 +205,34 @@ public final class ModBridgeServer {
 				throw new BridgeUnavailableException(exception.code(), exception.getMessage());
 			}
 		});
+	}
+
+	private void handleCameraScreenshot(HttpExchange exchange) throws IOException {
+		if (!authorize(exchange)) {
+			writeJson(exchange, 401, Map.of("error", "unauthorized", "message", "Invalid bridge token"));
+			return;
+		}
+
+		if (!"POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+			writeJson(exchange, 405, Map.of("error", "method_not_allowed"));
+			return;
+		}
+
+		try {
+			CompletableFuture<FirstPersonScreenshotService.CapturedScreenshot> captureFuture = onClientThread(() -> {
+				var client = getClient();
+				ensureWorldLoaded(client);
+				return screenshotService.requestCapture(client);
+			});
+			writeJson(exchange, 200, cameraScreenshotPayload(awaitCameraScreenshot(captureFuture)));
+		}
+		catch (BridgeUnavailableException exception) {
+			writeJson(exchange, 503, Map.of("error", exception.code(), "message", exception.getMessage()));
+		}
+		catch (Exception exception) {
+			Airicraft.LOGGER.warn("Bridge request failed", exception);
+			writeJson(exchange, 500, Map.of("error", "internal_error", "message", exception.getMessage()));
+		}
 	}
 
 	private void handleHighlights(HttpExchange exchange) throws IOException {
@@ -367,6 +405,42 @@ public final class ModBridgeServer {
 
 	private Object createStatusResponse() {
 		return onClientThread(() -> createStatusSnapshot(getClient()));
+	}
+
+	private FirstPersonScreenshotService.CapturedScreenshot awaitCameraScreenshot(
+		CompletableFuture<FirstPersonScreenshotService.CapturedScreenshot> captureFuture
+	) {
+		try {
+			return captureFuture.get(SCREENSHOT_CAPTURE_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS);
+		}
+		catch (TimeoutException exception) {
+			screenshotService.failActiveCapture("capture_timeout", "Screenshot capture timed out");
+			throw new BridgeUnavailableException("capture_timeout", "Screenshot capture timed out");
+		}
+		catch (InterruptedException exception) {
+			Thread.currentThread().interrupt();
+			screenshotService.failActiveCapture("capture_failed", "Screenshot capture was interrupted");
+			throw new BridgeUnavailableException("capture_failed", "Screenshot capture was interrupted");
+		}
+		catch (ExecutionException exception) {
+			if (exception.getCause() instanceof BridgeUnavailableException bridgeUnavailableException) {
+				throw bridgeUnavailableException;
+			}
+
+			throw new BridgeUnavailableException("capture_failed", "Failed to capture screenshot");
+		}
+	}
+
+	private static Map<String, Object> cameraScreenshotPayload(FirstPersonScreenshotService.CapturedScreenshot screenshot) {
+		Map<String, Object> payload = new LinkedHashMap<>();
+		payload.put("format", screenshot.format());
+		payload.put("width", screenshot.width());
+		payload.put("height", screenshot.height());
+		payload.put("sourceWidth", screenshot.sourceWidth());
+		payload.put("sourceHeight", screenshot.sourceHeight());
+		payload.put("capturedAtMs", screenshot.capturedAtMs());
+		payload.put("imageBase64", Base64.getEncoder().encodeToString(screenshot.imageBytes()));
+		return payload;
 	}
 
 	private Object createAgentStatusResponse() {
@@ -869,16 +943,4 @@ public final class ModBridgeServer {
 	private record VerificationRunRequest(String scenario) {
 	}
 
-	private static final class BridgeUnavailableException extends RuntimeException {
-		private final String code;
-
-		private BridgeUnavailableException(String code, String message) {
-			super(message);
-			this.code = code;
-		}
-
-		private String code() {
-			return code;
-		}
-	}
 }

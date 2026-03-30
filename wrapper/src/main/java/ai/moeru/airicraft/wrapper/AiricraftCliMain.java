@@ -13,6 +13,8 @@ import picocli.CommandLine.Spec;
 
 import java.io.PrintWriter;
 import java.io.UncheckedIOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -58,6 +60,10 @@ public final class AiricraftCliMain {
 		CommandLine player = root.getSubcommands().get("player");
 		player.addSubcommand(new PlayerFocusCommand(context));
 		player.addSubcommand(new PlayerLookAtCommand(context));
+
+		root.addSubcommand("camera", new UsageCommand(out, "airicraft camera", "Camera capture commands"));
+		CommandLine camera = root.getSubcommands().get("camera");
+		camera.addSubcommand(new CameraScreenshotCommand(context));
 
 		root.addSubcommand("world", new UsageCommand(out, "airicraft world", "World inspection commands"));
 		CommandLine world = root.getSubcommands().get("world");
@@ -246,6 +252,43 @@ public final class AiricraftCliMain {
 		@Override
 		Map<String, Object> runCommand() {
 			return transport().lookAt(x, y, z);
+		}
+	}
+
+	@Command(name = "screenshot", mixinStandardHelpOptions = true, description = "Capture a first-person screenshot.")
+	private static final class CameraScreenshotCommand implements Callable<Integer> {
+		private final CliContext context;
+
+		@Option(names = "--output", required = true, description = "Path to write the screenshot PNG.")
+		private Path output;
+
+		private CameraScreenshotCommand(CliContext context) {
+			this.context = context;
+		}
+
+		@Override
+		public Integer call() {
+			CapturedImage capture = context.transport.captureScreenshot();
+			Path outputPath = output.toAbsolutePath().normalize();
+			try {
+				Path parent = outputPath.getParent();
+				if (parent != null) {
+					Files.createDirectories(parent);
+				}
+				Files.write(outputPath, capture.bytes());
+			}
+			catch (java.io.IOException exception) {
+				throw new UncheckedIOException(exception);
+			}
+
+			LinkedHashMap<String, Object> payload = new LinkedHashMap<>();
+			payload.put("outputPath", outputPath.toString());
+			payload.put("format", capture.format());
+			payload.put("width", capture.width());
+			payload.put("height", capture.height());
+			payload.put("capturedAtMs", capture.capturedAtMs());
+			context.printer.printSuccess("camera screenshot", payload);
+			return 0;
 		}
 	}
 

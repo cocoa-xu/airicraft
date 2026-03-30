@@ -12,9 +12,11 @@ import java.net.InetSocketAddress;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.util.Map;
 import java.util.concurrent.Executors;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -85,6 +87,61 @@ class HttpBridgeTransportTest {
 
 			assertEquals("bridge_io_error", exception.code());
 			assertTrue(exception.getMessage().contains("timed out"));
+		}
+	}
+
+	@Test
+	void captureScreenshotDecodesBase64Payload(@TempDir Path tempDir) throws Exception {
+		try (TestBridgeServer server = TestBridgeServer.start()) {
+			server.respondJson("/v1/camera/screenshot", 0, 200, """
+				{
+				  "format":"png",
+				  "width":854,
+				  "height":480,
+				  "sourceWidth":1920,
+				  "sourceHeight":1080,
+				  "capturedAtMs":123456789,
+				  "imageBase64":"%s"
+				}
+				""".formatted(Base64.getEncoder().encodeToString(new byte[]{5, 6, 7})));
+			writeBridgeState(tempDir, server.port());
+			System.setProperty("user.home", tempDir.toString());
+
+			HttpBridgeTransport transport = new HttpBridgeTransport();
+			CapturedImage capturedImage = transport.captureScreenshot();
+
+			assertEquals("png", capturedImage.format());
+			assertEquals(854, capturedImage.width());
+			assertEquals(480, capturedImage.height());
+			assertEquals(1920, capturedImage.sourceWidth());
+			assertEquals(1080, capturedImage.sourceHeight());
+			assertEquals(123456789L, capturedImage.capturedAtMs());
+			assertArrayEquals(new byte[]{5, 6, 7}, capturedImage.bytes());
+		}
+	}
+
+	@Test
+	void captureScreenshotUsesLongerTimeout(@TempDir Path tempDir) throws Exception {
+		try (TestBridgeServer server = TestBridgeServer.start()) {
+			server.respondJson("/v1/camera/screenshot", 2500, 200, """
+				{
+				  "format":"png",
+				  "width":854,
+				  "height":480,
+				  "sourceWidth":854,
+				  "sourceHeight":480,
+				  "capturedAtMs":1,
+				  "imageBase64":"AQ=="
+				}
+				""");
+			writeBridgeState(tempDir, server.port());
+			System.setProperty("user.home", tempDir.toString());
+
+			HttpBridgeTransport transport = new HttpBridgeTransport();
+			CapturedImage capturedImage = transport.captureScreenshot();
+
+			assertEquals("png", capturedImage.format());
+			assertEquals(1, server.requestCount("/v1/camera/screenshot"));
 		}
 	}
 

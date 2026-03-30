@@ -1,14 +1,18 @@
 package ai.moeru.airicraft.wrapper;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import picocli.CommandLine;
 
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -105,6 +109,57 @@ class AiricraftCliMainTest {
 		assertTrue(result.output().contains("--duration-seconds"));
 	}
 
+	@Test
+	void cameraScreenshotWritesFileAndPrintsMetadata(@TempDir Path tempDir) throws Exception {
+		TestTransport transport = new TestTransport();
+		transport.capturedImage = new CapturedImage(
+			new byte[]{1, 2, 3, 4},
+			"png",
+			854,
+			480,
+			1920,
+			1080,
+			123456789L
+		);
+		Path output = tempDir.resolve("captures/view.png");
+
+		CliResult result = execute(transport, "camera", "screenshot", "--output", output.toString());
+
+		assertEquals(0, result.exitCode());
+		assertTrue(Files.exists(output));
+		assertArrayEquals(new byte[]{1, 2, 3, 4}, Files.readAllBytes(output));
+		assertTrue(result.output().contains("status: ok\n"));
+		assertTrue(result.output().contains("command: camera screenshot\n"));
+		assertTrue(result.output().contains("outputPath: " + output.toAbsolutePath().normalize() + "\n"));
+		assertTrue(result.output().contains("format: png\n"));
+		assertTrue(result.output().contains("width: 854\n"));
+		assertTrue(result.output().contains("height: 480\n"));
+		assertTrue(result.output().contains("capturedAtMs: 123456789\n"));
+	}
+
+	@Test
+	void cameraScreenshotRequiresOutputPath() {
+		CliResult result = execute(new TestTransport(), "camera", "screenshot");
+
+		assertEquals(2, result.exitCode());
+		assertTrue(result.output().contains("status: error\n"));
+		assertTrue(result.output().contains("command: camera screenshot\n"));
+		assertTrue(result.output().contains("error_code: invalid_arguments\n"));
+		assertTrue(result.output().contains("Missing required option: '--output"));
+	}
+
+	@Test
+	void cameraScreenshotBridgeErrorsUseTransportExitCodes() {
+		TestTransport transport = new TestTransport();
+		transport.captureScreenshotFailure = new BridgeUnavailableException("capture_timeout", "Screenshot capture timed out");
+
+		CliResult result = execute(transport, "camera", "screenshot", "--output", "capture.png");
+
+		assertEquals(4, result.exitCode());
+		assertTrue(result.output().contains("command: camera screenshot\n"));
+		assertTrue(result.output().contains("error_code: capture_timeout\n"));
+	}
+
 	private static CliResult execute(MinecraftTransport transport, String... args) {
 		StringWriter writer = new StringWriter();
 		CommandLine commandLine = AiricraftCliMain.createCommandLine(transport, new PrintWriter(writer, true));
@@ -137,9 +192,11 @@ class AiricraftCliMainTest {
 		private Map<String, Object> worldsJoinPayload = Map.of("started", true);
 		private Map<String, Object> serversJoinPayload = Map.of("started", true);
 		private Map<String, Object> lookAtPayload = Map.of("started", true);
+		private CapturedImage capturedImage = new CapturedImage(new byte[0], "png", 854, 480, 854, 480, 1L);
 
 		private RuntimeException worldsJoinFailure;
 		private RuntimeException serversListFailure;
+		private RuntimeException captureScreenshotFailure;
 
 		@Override
 		public Map<String, Object> getStatus() {
@@ -154,6 +211,14 @@ class AiricraftCliMainTest {
 		@Override
 		public Map<String, Object> getWorldSnapshot(Integer x, Integer y, Integer z, int radius) {
 			return snapshotPayload;
+		}
+
+		@Override
+		public CapturedImage captureScreenshot() {
+			if (captureScreenshotFailure != null) {
+				throw captureScreenshotFailure;
+			}
+			return capturedImage;
 		}
 
 		@Override

@@ -11,12 +11,14 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
 final class HttpBridgeTransport implements MinecraftTransport {
 	private static final Duration DEFAULT_REQUEST_TIMEOUT = Duration.ofSeconds(2);
 	private static final Duration JOIN_REQUEST_TIMEOUT = Duration.ofSeconds(15);
+	private static final Duration SCREENSHOT_REQUEST_TIMEOUT = Duration.ofSeconds(10);
 	private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 	private static final TypeReference<LinkedHashMap<String, Object>> MAP_TYPE = new TypeReference<>() {
 	};
@@ -54,6 +56,25 @@ final class HttpBridgeTransport implements MinecraftTransport {
 			path.append("&x=").append(x).append("&y=").append(y).append("&z=").append(z);
 		}
 		return get(path.toString());
+	}
+
+	@Override
+	public CapturedImage captureScreenshot() {
+		Map<String, Object> payload = send("POST", "/v1/camera/screenshot", null);
+		try {
+			return new CapturedImage(
+				Base64.getDecoder().decode(requiredString(payload, "imageBase64")),
+				requiredString(payload, "format"),
+				requiredInt(payload, "width"),
+				requiredInt(payload, "height"),
+				requiredInt(payload, "sourceWidth"),
+				requiredInt(payload, "sourceHeight"),
+				requiredLong(payload, "capturedAtMs")
+			);
+		}
+		catch (IllegalArgumentException exception) {
+			throw new BridgeUnavailableException("bridge_io_error", "Bridge returned an invalid screenshot payload");
+		}
 	}
 
 	@Override
@@ -206,8 +227,33 @@ final class HttpBridgeTransport implements MinecraftTransport {
 
 	private static Duration requestTimeout(String path) {
 		return switch (path) {
+			case "/v1/camera/screenshot" -> SCREENSHOT_REQUEST_TIMEOUT;
 			case "/v1/worlds/join", "/v1/servers/join" -> JOIN_REQUEST_TIMEOUT;
 			default -> DEFAULT_REQUEST_TIMEOUT;
 		};
+	}
+
+	private static String requiredString(Map<String, Object> payload, String key) {
+		Object value = payload.get(key);
+		if (value instanceof String text && !text.isBlank()) {
+			return text;
+		}
+		throw new IllegalArgumentException("Missing string field: " + key);
+	}
+
+	private static int requiredInt(Map<String, Object> payload, String key) {
+		Object value = payload.get(key);
+		if (value instanceof Number number) {
+			return number.intValue();
+		}
+		throw new IllegalArgumentException("Missing integer field: " + key);
+	}
+
+	private static long requiredLong(Map<String, Object> payload, String key) {
+		Object value = payload.get(key);
+		if (value instanceof Number number) {
+			return number.longValue();
+		}
+		throw new IllegalArgumentException("Missing integer field: " + key);
 	}
 }

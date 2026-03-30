@@ -7,7 +7,8 @@ import net.minecraft.client.MinecraftClient;
 public final class ClientRuntimeController {
 	private final HighlightManager highlightManager = new HighlightManager();
 	private final EmbodiedAgentRuntime agentRuntime = EmbodiedAgentRuntime.createDefault();
-	private final ModBridgeServer bridgeServer = new ModBridgeServer(highlightManager, agentRuntime);
+	private final FirstPersonScreenshotService screenshotService = new FirstPersonScreenshotService();
+	private final ModBridgeServer bridgeServer = new ModBridgeServer(highlightManager, agentRuntime, screenshotService);
 
 	public HighlightManager highlightManager() {
 		return highlightManager;
@@ -17,12 +18,17 @@ public final class ClientRuntimeController {
 		return agentRuntime;
 	}
 
+	public FirstPersonScreenshotService screenshotService() {
+		return screenshotService;
+	}
+
 	public void onClientStarted(MinecraftClient client) {
 		agentRuntime.onClientStarted(client);
 		bridgeServer.start();
 	}
 
 	public void onWorldLeave() {
+		screenshotService.failActiveCapture("capture_failed", "Screenshot capture was interrupted");
 		agentRuntime.onWorldLeave();
 		highlightManager.clear();
 	}
@@ -40,7 +46,15 @@ public final class ClientRuntimeController {
 		highlightManager.render(context);
 	}
 
+	public void onFirstPersonFrameRendered() {
+		MinecraftClient client = MinecraftClient.getInstance();
+		if (client != null) {
+			screenshotService.onWorldRendered(client);
+		}
+	}
+
 	public void shutdown() {
+		screenshotService.failActiveCapture("capture_failed", "Screenshot capture was interrupted");
 		agentRuntime.shutdown();
 		highlightManager.clear();
 		bridgeServer.stop();
