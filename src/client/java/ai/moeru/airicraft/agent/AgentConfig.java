@@ -19,7 +19,6 @@ public record AgentConfig(
 		int requestTimeoutMillis,
 		int visionRequestTimeoutMillis,
 		int maxRecentConversationTurns,
-		boolean enableProactiveSocialMode,
 		String visionImageDetail
 	) {
 		public static LlmConfig defaults() {
@@ -33,7 +32,6 @@ public record AgentConfig(
 				15_000,
 				10_000,
 				8,
-				false,
 				"low"
 			);
 		}

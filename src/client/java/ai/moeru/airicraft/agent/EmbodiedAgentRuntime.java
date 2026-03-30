@@ -1,5 +1,7 @@
 package ai.moeru.airicraft.agent;
 
+import ai.moeru.airicraft.AiricraftConfig;
+import ai.moeru.airicraft.AiricraftConfigLoader;
 import ai.moeru.airicraft.FirstPersonScreenshotService;
 import ai.moeru.airicraft.SingleplayerWorldService;
 import ai.moeru.airicraft.agent.behavior.BehaviorTreeRuntime;
@@ -53,11 +55,16 @@ import net.minecraft.text.Text;
 import net.minecraft.util.math.Vec3d;
 
 import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.UUID;
 
 public final class EmbodiedAgentRuntime {
+	static final long CHAT_ECHO_SUPPRESSION_TICKS = 40L;
+
+	private final AiricraftConfig airicraftConfig;
 	private final AgentConfig config;
 	private final VerificationRunner verificationRunner = new VerificationRunner();
 	private final SingleplayerWorldService singleplayerWorldService = new SingleplayerWorldService();
@@ -65,7 +72,7 @@ public final class EmbodiedAgentRuntime {
 	private final LanHostingService lanHostingService = new LanHostingService();
 	private final SemanticEventBuffer eventBuffer = new SemanticEventBuffer(512);
 	private final ChatIngestService chatIngestService = new ChatIngestService();
-	private final NearbyPlayerTracker nearbyPlayerTracker = new NearbyPlayerTracker();
+	private final NearbyPlayerTracker nearbyPlayerTracker;
 	private final PrimaryInteractionResolver primaryInteractionResolver = new PrimaryInteractionResolver(200L);
 	private final GoalDirector goalDirector = new GoalDirector();
 	private final FollowCapability followCapability = new FollowCapability();
@@ -80,9 +87,14 @@ public final class EmbodiedAgentRuntime {
 	private Boolean proactiveSocialModeOverride;
 	private SessionSnapshot sessionSnapshot = SessionSnapshot.initial();
 	private FollowState followState = FollowState.idle();
+	private long lastSystemChatTick = -1L;
+	private String lastSystemChatText;
+	private final Map<UUID, String> seenPlayerNames = new LinkedHashMap<>();
 
-	public EmbodiedAgentRuntime(AgentConfig config, FirstPersonScreenshotService screenshotService) {
+	public EmbodiedAgentRuntime(AiricraftConfig airicraftConfig, AgentConfig config, FirstPersonScreenshotService screenshotService) {
+		this.airicraftConfig = Objects.requireNonNull(airicraftConfig, "airicraftConfig");
 		this.config = Objects.requireNonNull(config, "config");
+		this.nearbyPlayerTracker = new NearbyPlayerTracker(resolveNearbyPlayerTrackingRadius(airicraftConfig));
 		this.visionService = new CurrentViewVisionService(
 			Objects.requireNonNull(screenshotService, "screenshotService"),
 			new OpenAiCompatibleVisionBackend(config.llm()),
@@ -98,8 +110,12 @@ public final class EmbodiedAgentRuntime {
 		registerDefaultScenarios();
 	}
 
+	public static EmbodiedAgentRuntime createDefault(AiricraftConfig airicraftConfig, FirstPersonScreenshotService screenshotService) {
+		return new EmbodiedAgentRuntime(airicraftConfig, AgentConfigLoader.load(), screenshotService);
+	}
+
 	public static EmbodiedAgentRuntime createDefault(FirstPersonScreenshotService screenshotService) {
-		return new EmbodiedAgentRuntime(AgentConfigLoader.load(), screenshotService);
+		return createDefault(AiricraftConfigLoader.load(), screenshotService);
 	}
 
 	public AgentConfig config() {
@@ -132,6 +148,9 @@ public final class EmbodiedAgentRuntime {
 		behaviorTreeRuntime.stop(MinecraftClient.getInstance());
 		chatService.clear();
 		proactiveSocialModeOverride = null;
+		lastSystemChatTick = -1L;
+		lastSystemChatText = null;
+		seenPlayerNames.clear();
 	}
 
 	public void onClientTick(MinecraftClient client) {
@@ -210,6 +229,9 @@ public final class EmbodiedAgentRuntime {
 		behaviorTreeRuntime.stop(MinecraftClient.getInstance());
 		chatService.clear();
 		proactiveSocialModeOverride = null;
+		lastSystemChatTick = -1L;
+		lastSystemChatText = null;
+		seenPlayerNames.clear();
 		sessionSnapshot = SessionSnapshot.initial();
 	}
 
@@ -272,6 +294,17 @@ public final class EmbodiedAgentRuntime {
 	}
 
 	public void onChatReceived(String senderName, String plainTextMessage) {
+		if (isAgentChatEcho(
+			senderName,
+			plainTextMessage,
+			localPlayerName(),
+			chatService.lastChatText(),
+			tickCount,
+			chatService.lastChatTick()
+		)) {
+			return;
+		}
+
 		chatIngestService.ingest(
 			senderName,
 			plainTextMessage,
@@ -287,7 +320,7 @@ public final class EmbodiedAgentRuntime {
 
 		boolean plannerEligibleChat = ChatIngestService.isAddressedToAgent(plainTextMessage)
 			|| proactiveSocialModeEnabled();
-		if (nearbyPlayerTracker.findByName(senderName).isPresent() && plannerEligibleChat) {
+		if (plannerEligibleChat && playerChatWithinConfiguredDistance(senderName)) {
 			dialogueRuntime.onPlayerChat(
 				senderName,
 				plainTextMessage,
@@ -297,6 +330,63 @@ public final class EmbodiedAgentRuntime {
 				goalDirector.activeGoal()
 			);
 		}
+	}
+
+	public void onSystemChatReceived(String plainTextMessage) {
+		if (!airicraftConfig.readSystemChatMessages()) {
+			return;
+		}
+		if (isDuplicateSystemChat(plainTextMessage, tickCount)) {
+			return;
+		}
+
+		chatIngestService.ingestSystemMessage(plainTextMessage, tickCount, eventBuffer);
+		if (!proactiveSocialModeEnabled()) {
+			return;
+		}
+
+		dialogueRuntime.onPlayerChat(
+			"server",
+			plainTextMessage,
+			tickCount,
+			sessionSnapshot,
+			primaryInteractionResolver.current().map(PrimaryInteractionPlayer::name).orElse(null),
+			goalDirector.activeGoal()
+		);
+	}
+
+	public void onPlayerJoinedGame(UUID playerUuid, String playerName) {
+		if (playerUuid == null || playerName == null || playerName.isBlank()) {
+			return;
+		}
+		if (isLocalPlayer(playerUuid, playerName)) {
+			seenPlayerNames.put(playerUuid, playerName);
+			return;
+		}
+		if (seenPlayerNames.putIfAbsent(playerUuid, playerName) != null) {
+			return;
+		}
+
+		eventBuffer.append(tickCount, "social.player_joined_game", Map.of(
+			"player", playerName
+		));
+		forwardSyntheticPresenceMessage(playerName + " joined the game");
+	}
+
+	public void onPlayerLeftGame(UUID playerUuid) {
+		if (playerUuid == null) {
+			return;
+		}
+
+		String playerName = seenPlayerNames.remove(playerUuid);
+		if (playerName == null || playerName.isBlank() || isLocalPlayer(playerUuid, playerName)) {
+			return;
+		}
+
+		eventBuffer.append(tickCount, "social.player_left_game", Map.of(
+			"player", playerName
+		));
+		forwardSyntheticPresenceMessage(playerName + " left the game");
 	}
 
 	public SemanticEventQueryResult recentEvents(Long sinceSeqNo) {
@@ -330,11 +420,115 @@ public final class EmbodiedAgentRuntime {
 	private boolean proactiveSocialModeEnabled() {
 		return proactiveSocialModeOverride != null
 			? proactiveSocialModeOverride.booleanValue()
-			: config.llm().enableProactiveSocialMode();
+			: airicraftConfig.enableProactiveSocialMode();
 	}
 
 	private void setProactiveSocialModeOverride(Boolean enabled) {
 		proactiveSocialModeOverride = enabled;
+	}
+
+	private boolean playerChatWithinConfiguredDistance(String senderName) {
+		if (airicraftConfig.socialChatDistanceUnlimited()) {
+			return true;
+		}
+
+		Optional<NearbyPlayerSnapshot> nearbyPlayer = nearbyPlayerTracker.findByName(senderName);
+		if (nearbyPlayer.isEmpty()) {
+			return false;
+		}
+
+		MinecraftClient client = MinecraftClient.getInstance();
+		if (client == null || client.player == null) {
+			return false;
+		}
+
+		Vec3d selfPos = new Vec3d(client.player.getX(), client.player.getY(), client.player.getZ());
+		Vec3d senderPos = new Vec3d(nearbyPlayer.get().x(), nearbyPlayer.get().y(), nearbyPlayer.get().z());
+		double maxDistance = airicraftConfig.socialChatMaxDistanceBlocks();
+		return selfPos.squaredDistanceTo(senderPos) <= maxDistance * maxDistance;
+	}
+
+	private static double resolveNearbyPlayerTrackingRadius(AiricraftConfig airicraftConfig) {
+		if (airicraftConfig.socialChatDistanceUnlimited()) {
+			return 32.0D;
+		}
+		return Math.max(32.0D, airicraftConfig.socialChatMaxDistanceBlocks());
+	}
+
+	private String localPlayerName() {
+		MinecraftClient client = MinecraftClient.getInstance();
+		if (client == null || client.player == null) {
+			return null;
+		}
+		Text playerName = client.player.getName();
+		return playerName == null ? null : playerName.getString();
+	}
+
+	static boolean isAgentChatEcho(
+		String senderName,
+		String plainTextMessage,
+		String localPlayerName,
+		String lastAgentChatText,
+		long currentTick,
+		long lastAgentChatTick
+	) {
+		if (senderName == null || plainTextMessage == null || localPlayerName == null || lastAgentChatText == null) {
+			return false;
+		}
+		if (!senderName.equals(localPlayerName)) {
+			return false;
+		}
+		if (!plainTextMessage.equals(lastAgentChatText)) {
+			return false;
+		}
+		if (lastAgentChatTick < 0L || currentTick < lastAgentChatTick) {
+			return false;
+		}
+		return currentTick - lastAgentChatTick <= CHAT_ECHO_SUPPRESSION_TICKS;
+	}
+
+	private boolean isDuplicateSystemChat(String plainTextMessage, long currentTick) {
+		if (plainTextMessage == null || plainTextMessage.isBlank()) {
+			return true;
+		}
+		boolean duplicate = currentTick == lastSystemChatTick && plainTextMessage.equals(lastSystemChatText);
+		lastSystemChatTick = currentTick;
+		lastSystemChatText = plainTextMessage;
+		return duplicate;
+	}
+
+	private void forwardSyntheticPresenceMessage(String plainTextMessage) {
+		if (!airicraftConfig.readSystemChatMessages()) {
+			return;
+		}
+		if (isDuplicateSystemChat(plainTextMessage, tickCount)) {
+			return;
+		}
+
+		chatIngestService.ingestSystemMessage(plainTextMessage, tickCount, eventBuffer);
+		if (!proactiveSocialModeEnabled()) {
+			return;
+		}
+
+		dialogueRuntime.onPlayerChat(
+			"server",
+			plainTextMessage,
+			tickCount,
+			sessionSnapshot,
+			primaryInteractionResolver.current().map(PrimaryInteractionPlayer::name).orElse(null),
+			goalDirector.activeGoal()
+		);
+	}
+
+	private boolean isLocalPlayer(UUID playerUuid, String playerName) {
+		MinecraftClient client = MinecraftClient.getInstance();
+		if (client == null) {
+			return false;
+		}
+		if (client.player != null && playerUuid.equals(client.player.getUuid())) {
+			return true;
+		}
+		return client.getSession() != null && playerName.equals(client.getSession().getUsername());
 	}
 
 	private void recordPlannerOutcome(

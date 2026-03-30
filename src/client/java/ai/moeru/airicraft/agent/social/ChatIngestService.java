@@ -21,18 +21,14 @@ public final class ChatIngestService {
 		Objects.requireNonNull(primaryInteractionResolver, "primaryInteractionResolver");
 		Objects.requireNonNull(eventBuffer, "eventBuffer");
 
-		Optional<NearbyPlayerSnapshot> nearbyPlayer = nearbyPlayerTracker.findByName(senderName);
-		if (nearbyPlayer.isEmpty()) {
-			return;
-		}
-
 		String normalizedMessage = normalize(plainTextMessage);
 		eventBuffer.append(tick, "social.player_spoke", Map.of(
 			"player", senderName,
 			"message", plainTextMessage,
 			"normalizedMessage", normalizedMessage
 		));
-		primaryInteractionResolver.onPlayerSpoke(nearbyPlayer.get(), tick);
+		Optional<NearbyPlayerSnapshot> nearbyPlayer = nearbyPlayerTracker.findByName(senderName);
+		nearbyPlayer.ifPresent(player -> primaryInteractionResolver.onPlayerSpoke(player, tick));
 
 		if (isAddressedToAgent(plainTextMessage)) {
 			eventBuffer.append(tick, "social.player_addressed_agent", Map.of(
@@ -52,6 +48,17 @@ public final class ChatIngestService {
 		SemanticEventBuffer eventBuffer
 	) {
 		ingest(senderName, plainTextMessage, tick, nearbyPlayerTracker, primaryInteractionResolver, eventBuffer);
+	}
+
+	public void ingestSystemMessage(String plainTextMessage, long tick, SemanticEventBuffer eventBuffer) {
+		Objects.requireNonNull(plainTextMessage, "plainTextMessage");
+		Objects.requireNonNull(eventBuffer, "eventBuffer");
+
+		String normalizedMessage = normalize(plainTextMessage);
+		eventBuffer.append(tick, "social.system_message", Map.of(
+			"message", plainTextMessage,
+			"normalizedMessage", normalizedMessage
+		));
 	}
 
 	public static boolean isAddressedToAgent(String plainTextMessage) {

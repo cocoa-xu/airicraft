@@ -4,11 +4,18 @@ import ai.moeru.airicraft.agent.EmbodiedAgentRuntime;
 import net.fabricmc.fabric.api.client.rendering.v1.world.WorldRenderContext;
 import net.minecraft.client.MinecraftClient;
 
+import java.util.UUID;
+
 public final class ClientRuntimeController {
+	private final AiricraftConfig config = AiricraftConfigLoader.load();
 	private final HighlightManager highlightManager = new HighlightManager();
 	private final FirstPersonScreenshotService screenshotService = new FirstPersonScreenshotService();
-	private final EmbodiedAgentRuntime agentRuntime = EmbodiedAgentRuntime.createDefault(screenshotService);
+	private final EmbodiedAgentRuntime agentRuntime = EmbodiedAgentRuntime.createDefault(config, screenshotService);
 	private final ModBridgeServer bridgeServer = new ModBridgeServer(highlightManager, agentRuntime, screenshotService);
+
+	public AiricraftConfig config() {
+		return config;
+	}
 
 	public HighlightManager highlightManager() {
 		return highlightManager;
@@ -40,6 +47,18 @@ public final class ClientRuntimeController {
 
 	public void onChatReceived(String senderName, String plainTextMessage) {
 		agentRuntime.onChatReceived(senderName, plainTextMessage);
+	}
+
+	public void onSystemChatReceived(String plainTextMessage) {
+		agentRuntime.onSystemChatReceived(plainTextMessage);
+	}
+
+	public void onPlayerJoinedGame(UUID playerUuid, String playerName) {
+		agentRuntime.onPlayerJoinedGame(playerUuid, playerName);
+	}
+
+	public void onPlayerLeftGame(UUID playerUuid) {
+		agentRuntime.onPlayerLeftGame(playerUuid);
 	}
 
 	public void onWorldRender(WorldRenderContext context) {

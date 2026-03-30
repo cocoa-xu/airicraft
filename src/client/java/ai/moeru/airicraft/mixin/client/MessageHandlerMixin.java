@@ -45,6 +45,20 @@ public class MessageHandlerMixin {
 			return;
 		}
 
-		AiricraftClient.runtimeController().onChatReceived("server", message);
+		AiricraftClient.runtimeController().onSystemChatReceived(message);
+	}
+
+	@Inject(method = "onGameMessage", at = @At("TAIL"))
+	private void airicraft$onGameMessage(Text content, boolean overlay, CallbackInfo ci) {
+		if (overlay) {
+			return;
+		}
+
+		String message = content == null ? "" : content.getString();
+		if (message.isBlank()) {
+			return;
+		}
+
+		AiricraftClient.runtimeController().onSystemChatReceived(message);
 	}
 }

@@ -1,0 +1,9 @@
+# Maximum chat distance in blocks for player chat reaching the planner.
+# Use -1 for unlimited distance.
+socialChatMaxDistanceBlocks: -1
+
+# When true, profileless system chat such as death and advancement messages is ingested.
+readSystemChatMessages: true
+
+# When true, nearby non-@agent chat also goes through the planner.
+enableProactiveSocialMode: true

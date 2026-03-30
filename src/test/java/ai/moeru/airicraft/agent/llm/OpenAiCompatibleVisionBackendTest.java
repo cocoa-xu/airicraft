@@ -30,7 +30,6 @@ class OpenAiCompatibleVisionBackendTest {
 				15_000,
 				10_000,
 				8,
-				false,
 				"low"
 			));
 

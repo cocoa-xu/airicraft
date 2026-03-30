@@ -26,8 +26,5 @@ visionRequestTimeoutMillis: 10000
 # Number of recent dialogue turns retained in planner context.
 maxRecentConversationTurns: 8
 
-# When true, nearby non-@agent chat also goes through the planner.
-enableProactiveSocialMode: false
-
 # Image detail hint passed to compatible multimodal providers: low | high | auto
 visionImageDetail: "low"

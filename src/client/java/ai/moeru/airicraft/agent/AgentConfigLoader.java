@@ -67,7 +67,6 @@ public final class AgentConfigLoader {
 			readInt(root, "requestTimeoutMillis", defaults.llm().requestTimeoutMillis()),
 			readInt(root, "visionRequestTimeoutMillis", defaults.llm().visionRequestTimeoutMillis()),
 			readInt(root, "maxRecentConversationTurns", defaults.llm().maxRecentConversationTurns()),
-			readBoolean(root, "enableProactiveSocialMode", defaults.llm().enableProactiveSocialMode()),
 			readString(root, "visionImageDetail", defaults.llm().visionImageDetail())
 		);
 		return new AgentConfig(defaults.verificationEnabled(), defaults.verificationAutoRunAll(), llm);
@@ -118,7 +117,6 @@ public final class AgentConfigLoader {
 		yamlData.put("requestTimeoutMillis", readInt(root, "requestTimeoutMillis", defaults.llm().requestTimeoutMillis()));
 		yamlData.put("visionRequestTimeoutMillis", readInt(root, "visionRequestTimeoutMillis", defaults.llm().visionRequestTimeoutMillis()));
 		yamlData.put("maxRecentConversationTurns", readInt(root, "maxRecentConversationTurns", defaults.llm().maxRecentConversationTurns()));
-		yamlData.put("enableProactiveSocialMode", readBoolean(root, "enableProactiveSocialMode", defaults.llm().enableProactiveSocialMode()));
 		yamlData.put("visionImageDetail", readString(root, "visionImageDetail", defaults.llm().visionImageDetail()));
 		Files.writeString(yamlConfigPath, dumpYaml(yamlData), StandardCharsets.UTF_8);
 	}
