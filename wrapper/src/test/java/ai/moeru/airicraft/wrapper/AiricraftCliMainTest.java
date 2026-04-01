@@ -42,6 +42,93 @@ class AiricraftCliMainTest {
 	}
 
 	@Test
+	void agentContextRendersCompactionState() {
+		TestTransport transport = new TestTransport();
+		transport.agentContextPayload = linkedMap(
+			"available", true,
+			"planner", linkedMap(
+				"configured", true,
+				"inFlight", false,
+				"plannerInFlight", false,
+				"compactionInFlight", false,
+				"toolInFlight", false,
+				"toolUsed", false,
+				"context", linkedMap(
+					"compactionTriggerTokens", 65536,
+					"compactionPending", true,
+					"rawArchiveEntryCount", 12,
+					"canonicalMessageCount", 8,
+					"pendingEntryCount", 1,
+					"frozenPlannerMessageCount", 0,
+					"lastObservedEventSeqNo", 42,
+					"lastTimeBeaconAtMs", 123456789L
+				)
+			)
+		);
+
+		CliResult result = execute(transport, "agent", "context");
+
+		assertEquals(0, result.exitCode());
+		assertTrue(result.output().contains("command: agent context\n"));
+		assertTrue(result.output().contains("compactionPending: true\n"));
+		assertTrue(result.output().contains("canonicalMessageCount: 8\n"));
+	}
+
+	@Test
+	void agentCompactPassesWaitAndTimeout() {
+		TestTransport transport = new TestTransport();
+		transport.agentCompactPayload = linkedMap(
+			"available", true,
+			"started", true,
+			"completed", false,
+			"timeoutMs", 7000,
+			"planner", linkedMap(
+				"configured", true,
+				"inFlight", true,
+				"plannerInFlight", false,
+				"compactionInFlight", true,
+				"toolInFlight", false,
+				"context", linkedMap(
+					"compactionPending", false,
+					"canonicalMessageCount", 5,
+					"rawArchiveEntryCount", 9
+				)
+			)
+		);
+
+		CliResult result = execute(transport, "agent", "compact", "--no-wait", "--timeout-seconds", "7");
+
+		assertEquals(0, result.exitCode());
+		assertFalse(transport.lastCompactWait);
+		assertEquals(Integer.valueOf(7000), transport.lastCompactTimeoutMs);
+		assertTrue(result.output().contains("command: agent compact\n"));
+		assertTrue(result.output().contains("completed: false\n"));
+	}
+
+	@Test
+	void agentEventsRecentPassesSinceFilter() {
+		TestTransport transport = new TestTransport();
+		transport.agentEventsPayload = linkedMap(
+			"available", true,
+			"oldestSeqNo", 10,
+			"latestSeqNo", 12,
+			"truncated", false,
+			"events", List.of(linkedMap(
+				"seqNo", 12,
+				"tick", 300,
+				"timestampMs", 123456789L,
+				"type", "planner.goal_set"
+			))
+		);
+
+		CliResult result = execute(transport, "agent", "events", "recent", "--since", "11");
+
+		assertEquals(0, result.exitCode());
+		assertEquals(Long.valueOf(11L), transport.lastEventSince);
+		assertTrue(result.output().contains("eventCount: 1\n"));
+	}
+
+	@Test
 	void worldsListOmitsVerboseFieldsByDefault() {
 		TestTransport transport = new TestTransport();
 		transport.worldsPayload = linkedMap(
@@ -215,6 +302,14 @@ class AiricraftCliMainTest {
 		private Map<String, Object> serversPayload = Map.of("servers", List.of());
 		private Map<String, Object> focusPayload = Map.of();
 		private Map<String, Object> snapshotPayload = Map.of();
+		private Map<String, Object> agentStatusPayload = Map.of();
+		private Map<String, Object> agentSessionPayload = Map.of();
+		private Map<String, Object> agentGoalsPayload = Map.of();
+		private Map<String, Object> agentTreePayload = Map.of();
+		private Map<String, Object> agentDialoguePayload = Map.of();
+		private Map<String, Object> agentContextPayload = Map.of();
+		private Map<String, Object> agentEventsPayload = Map.of("events", List.of());
+		private Map<String, Object> agentCompactPayload = Map.of("started", true);
 		private Map<String, Object> blockHighlightPayload = Map.of("highlightId", "highlight-1");
 		private Map<String, Object> regionHighlightPayload = Map.of("highlightId", "highlight-2");
 		private Map<String, Object> highlightsPayload = Map.of("highlights", List.of());
@@ -226,6 +321,9 @@ class AiricraftCliMainTest {
 		private CapturedImage capturedImage = new CapturedImage(new byte[0], "png", 854, 480, 854, 480, 1L);
 		private VisionDescriptionResult visionDescriptionResult = new VisionDescriptionResult("text", 1L, "gpt-4.1-mini", "desc");
 		private String lastVisionPrompt;
+		private Long lastEventSince;
+		private boolean lastCompactWait = true;
+		private Integer lastCompactTimeoutMs;
 
 		private RuntimeException worldsJoinFailure;
 		private RuntimeException serversListFailure;
@@ -314,6 +412,49 @@ class AiricraftCliMainTest {
 		@Override
 		public Map<String, Object> clearHighlights() {
 			return clearHighlightsPayload;
+		}
+
+		@Override
+		public Map<String, Object> getAgentStatus() {
+			return agentStatusPayload;
+		}
+
+		@Override
+		public Map<String, Object> getAgentSession() {
+			return agentSessionPayload;
+		}
+
+		@Override
+		public Map<String, Object> getAgentGoals() {
+			return agentGoalsPayload;
+		}
+
+		@Override
+		public Map<String, Object> getAgentTree() {
+			return agentTreePayload;
+		}
+
+		@Override
+		public Map<String, Object> getAgentDialogue() {
+			return agentDialoguePayload;
+		}
+
+		@Override
+		public Map<String, Object> getAgentContext() {
+			return agentContextPayload;
+		}
+
+		@Override
+		public Map<String, Object> listRecentAgentEvents(Long sinceSeqNo) {
+			lastEventSince = sinceSeqNo;
+			return agentEventsPayload;
+		}
+
+		@Override
+		public Map<String, Object> triggerAgentCompaction(boolean wait, Integer timeoutMs) {
+			lastCompactWait = wait;
+			lastCompactTimeoutMs = timeoutMs;
+			return agentCompactPayload;
 		}
 	}
 }

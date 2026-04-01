@@ -44,9 +44,22 @@ public final class AiricraftCliMain {
 		root.setParameterExceptionHandler(new CliParameterExceptionHandler(context));
 		root.setUsageHelpWidth(100);
 
-		root.addSubcommand(new StatusCommand(context));
+			root.addSubcommand(new StatusCommand(context));
 
-		root.addSubcommand("worlds", new UsageCommand(out, "airicraft worlds", "Saved singleplayer worlds"));
+			root.addSubcommand("agent", new UsageCommand(out, "airicraft agent", "Agent observability and debug commands"));
+			CommandLine agent = root.getSubcommands().get("agent");
+			agent.addSubcommand(new AgentStatusCommand(context));
+			agent.addSubcommand(new AgentSessionCommand(context));
+			agent.addSubcommand(new AgentGoalsCommand(context));
+			agent.addSubcommand(new AgentTreeCommand(context));
+			agent.addSubcommand(new AgentDialogueCommand(context));
+			agent.addSubcommand(new AgentContextCommand(context));
+			agent.addSubcommand(new AgentCompactCommand(context));
+			agent.addSubcommand("events", new UsageCommand(out, "airicraft agent events", "Agent event stream commands"));
+			CommandLine agentEvents = agent.getSubcommands().get("events");
+			agentEvents.addSubcommand(new AgentEventsRecentCommand(context));
+
+			root.addSubcommand("worlds", new UsageCommand(out, "airicraft worlds", "Saved singleplayer worlds"));
 		CommandLine worlds = root.getSubcommands().get("worlds");
 		worlds.addSubcommand(new WorldsListCommand(context));
 		worlds.addSubcommand(new WorldsJoinCommand(context));
@@ -169,6 +182,118 @@ public final class AiricraftCliMain {
 		@Override
 		Map<String, Object> runCommand() {
 			return PayloadViews.status(transport().getStatus(), verbose());
+		}
+	}
+
+	@Command(name = "status", mixinStandardHelpOptions = true, description = "Inspect agent runtime status.")
+	private static final class AgentStatusCommand extends BaseCommand {
+		private AgentStatusCommand(CliContext context) {
+			super(context, "agent status");
+		}
+
+		@Override
+		Map<String, Object> runCommand() {
+			return PayloadViews.agentStatus(transport().getAgentStatus(), verbose());
+		}
+	}
+
+	@Command(name = "session", mixinStandardHelpOptions = true, description = "Inspect agent session state.")
+	private static final class AgentSessionCommand extends BaseCommand {
+		private AgentSessionCommand(CliContext context) {
+			super(context, "agent session");
+		}
+
+		@Override
+		Map<String, Object> runCommand() {
+			return PayloadViews.agentSession(transport().getAgentSession(), verbose());
+		}
+	}
+
+	@Command(name = "goals", mixinStandardHelpOptions = true, description = "Inspect active agent goals.")
+	private static final class AgentGoalsCommand extends BaseCommand {
+		private AgentGoalsCommand(CliContext context) {
+			super(context, "agent goals");
+		}
+
+		@Override
+		Map<String, Object> runCommand() {
+			return PayloadViews.agentGoals(transport().getAgentGoals(), verbose());
+		}
+	}
+
+	@Command(name = "tree", mixinStandardHelpOptions = true, description = "Inspect the behavior tree snapshot.")
+	private static final class AgentTreeCommand extends BaseCommand {
+		private AgentTreeCommand(CliContext context) {
+			super(context, "agent tree");
+		}
+
+		@Override
+		Map<String, Object> runCommand() {
+			return transport().getAgentTree();
+		}
+	}
+
+	@Command(name = "dialogue", mixinStandardHelpOptions = true, description = "Inspect dialogue state and recent turns.")
+	private static final class AgentDialogueCommand extends BaseCommand {
+		private AgentDialogueCommand(CliContext context) {
+			super(context, "agent dialogue");
+		}
+
+		@Override
+		Map<String, Object> runCommand() {
+			return PayloadViews.agentDialogue(transport().getAgentDialogue(), verbose());
+		}
+	}
+
+	@Command(name = "context", mixinStandardHelpOptions = true, description = "Inspect planner context aggregation and compaction state.")
+	private static final class AgentContextCommand extends BaseCommand {
+		private AgentContextCommand(CliContext context) {
+			super(context, "agent context");
+		}
+
+		@Override
+		Map<String, Object> runCommand() {
+			return PayloadViews.agentContext(transport().getAgentContext(), verbose());
+		}
+	}
+
+	@Command(name = "recent", mixinStandardHelpOptions = true, description = "List recent agent events.")
+	private static final class AgentEventsRecentCommand extends BaseCommand {
+		@Option(names = "--since", description = "Only return events with seqNo greater than this value.")
+		private Long since;
+
+		private AgentEventsRecentCommand(CliContext context) {
+			super(context, "agent events recent");
+		}
+
+		@Override
+		Map<String, Object> runCommand() {
+			return PayloadViews.agentEvents(transport().listRecentAgentEvents(since), verbose());
+		}
+	}
+
+	@Command(name = "compact", mixinStandardHelpOptions = true, description = "Trigger a planner context compaction for debugging.")
+	private static final class AgentCompactCommand extends BaseCommand {
+		@Option(names = "--no-wait", description = "Return immediately after starting compaction.")
+		private boolean noWait;
+
+		@Option(names = "--timeout-seconds", description = "Wait timeout in seconds when compaction is synchronous.")
+		private Integer timeoutSeconds;
+
+		private AgentCompactCommand(CliContext context) {
+			super(context, "agent compact");
+		}
+
+		@Override
+		Map<String, Object> runCommand() {
+			if (timeoutSeconds != null && timeoutSeconds < 1) {
+				throw new CliUsageException(commandPath(), "invalid_arguments", "timeout-seconds must be positive");
+			}
+			if (timeoutSeconds != null && timeoutSeconds > Integer.MAX_VALUE / 1000) {
+				throw new CliUsageException(commandPath(), "invalid_arguments", "timeout-seconds is too large");
+			}
+			Integer timeoutMs = timeoutSeconds == null ? null : timeoutSeconds * 1000;
+			return PayloadViews.agentCompact(transport().triggerAgentCompaction(!noWait, timeoutMs), verbose());
 		}
 	}
 
@@ -655,6 +780,93 @@ public final class AiricraftCliMain {
 			return view;
 		}
 
+		private static Map<String, Object> agentStatus(Map<String, Object> payload, boolean verbose) {
+			LinkedHashMap<String, Object> view = new LinkedHashMap<>();
+			copy(view, payload, "available", "initialized", "tickCount", "llmAvailable", "visionAvailable", "degraded");
+			if (payload.containsKey("session")) {
+				view.put("session", payload.get("session"));
+			}
+			if (verbose && payload.containsKey("verification")) {
+				view.put("verification", payload.get("verification"));
+			}
+			return view;
+		}
+
+		private static Map<String, Object> agentSession(Map<String, Object> payload, boolean verbose) {
+			LinkedHashMap<String, Object> view = new LinkedHashMap<>();
+			copy(view, payload, "available", "lanPublished", "lanPort", "primaryInteractionPlayer", "session");
+			List<Map<String, Object>> nearbyPlayers = maps(payload.get("nearbyPlayers"));
+			view.put("nearbyPlayerCount", nearbyPlayers.size());
+			if (verbose) {
+				view.put("nearbyPlayers", nearbyPlayers);
+			}
+			return view;
+		}
+
+		private static Map<String, Object> agentGoals(Map<String, Object> payload, boolean verbose) {
+			LinkedHashMap<String, Object> view = new LinkedHashMap<>();
+			copy(view, payload, "available", "activeGoal");
+			if (verbose) {
+				copy(view, payload, "lastDialogueResponse");
+			}
+			return view;
+		}
+
+		private static Map<String, Object> agentDialogue(Map<String, Object> payload, boolean verbose) {
+			LinkedHashMap<String, Object> view = new LinkedHashMap<>();
+			copy(view, payload, "available", "lastChatTick", "lastChatText");
+			Map<String, Object> dialogue = map(payload.get("dialogue"));
+			copy(view, dialogue, "degraded", "consecutiveFailureCount", "lastFailureType", "lastFailureTick");
+			List<Map<String, Object>> recentTurns = maps(dialogue.get("recentTurns"));
+			view.put("recentTurnCount", recentTurns.size());
+			if (verbose) {
+				copy(view, dialogue, "lastResponse");
+				view.put("recentTurns", recentTurns);
+			}
+			return view;
+		}
+
+		private static Map<String, Object> agentEvents(Map<String, Object> payload, boolean verbose) {
+			LinkedHashMap<String, Object> view = new LinkedHashMap<>();
+			copy(view, payload, "available", "oldestSeqNo", "latestSeqNo", "truncated");
+			List<Map<String, Object>> events = maps(payload.get("events"));
+			view.put("eventCount", events.size());
+			view.put("events", verbose ? events : filterItems(events, false,
+				List.of("seqNo", "tick", "timestampMs", "type"),
+				List.of("payload")
+			));
+			return view;
+		}
+
+		private static Map<String, Object> agentContext(Map<String, Object> payload, boolean verbose) {
+			LinkedHashMap<String, Object> view = new LinkedHashMap<>();
+			view.put("available", payload.getOrDefault("available", false));
+			Map<String, Object> planner = map(payload.get("planner"));
+			Map<String, Object> context = map(planner.get("context"));
+			copy(view, planner, "configured", "inFlight", "plannerInFlight", "compactionInFlight", "toolInFlight", "toolUsed");
+			copy(view, context, "compactionTriggerTokens", "compactionPending", "rawArchiveEntryCount", "canonicalMessageCount",
+				"pendingEntryCount", "frozenPlannerMessageCount", "lastObservedEventSeqNo", "lastTimeBeaconAtMs");
+			if (verbose) {
+				copy(view, planner, "baseRequest", "lastCompactionResult");
+				copy(view, context, "lastObservedUsage", "ambientContext", "activeCheckpoint");
+			}
+			return view;
+		}
+
+		private static Map<String, Object> agentCompact(Map<String, Object> payload, boolean verbose) {
+			LinkedHashMap<String, Object> view = new LinkedHashMap<>();
+			copy(view, payload, "available", "started", "completed", "timeoutMs");
+			Map<String, Object> planner = map(payload.get("planner"));
+			Map<String, Object> context = map(planner.get("context"));
+			copy(view, planner, "configured", "inFlight", "plannerInFlight", "compactionInFlight", "toolInFlight");
+			copy(view, context, "compactionPending", "canonicalMessageCount", "rawArchiveEntryCount");
+			if (verbose) {
+				copy(view, planner, "lastCompactionResult");
+				copy(view, context, "lastObservedUsage", "activeCheckpoint");
+			}
+			return view;
+		}
+
 		private static Map<String, Object> worldsList(Map<String, Object> payload, boolean verbose) {
 			LinkedHashMap<String, Object> view = new LinkedHashMap<>();
 			copy(view, payload, "available", "sessionState");
@@ -739,6 +951,13 @@ public final class AiricraftCliMain {
 				}
 			}
 			return maps;
+		}
+
+		private static Map<String, Object> map(Object value) {
+			if (value instanceof Map<?, ?> map) {
+				return castMap(map);
+			}
+			return Map.of();
 		}
 	}
 

@@ -20,6 +20,7 @@ final class HttpBridgeTransport implements MinecraftTransport {
 	private static final Duration JOIN_REQUEST_TIMEOUT = Duration.ofSeconds(15);
 	private static final Duration SCREENSHOT_REQUEST_TIMEOUT = Duration.ofSeconds(10);
 	private static final Duration VISION_REQUEST_TIMEOUT = Duration.ofSeconds(20);
+	private static final Duration DEBUG_COMPACTION_REQUEST_TIMEOUT = Duration.ofSeconds(45);
 	private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 	private static final TypeReference<LinkedHashMap<String, Object>> MAP_TYPE = new TypeReference<>() {
 	};
@@ -188,6 +189,54 @@ final class HttpBridgeTransport implements MinecraftTransport {
 		return send("DELETE", "/v1/highlights", null);
 	}
 
+	@Override
+	public Map<String, Object> getAgentStatus() {
+		return get("/v1/agent/status");
+	}
+
+	@Override
+	public Map<String, Object> getAgentSession() {
+		return get("/v1/agent/session");
+	}
+
+	@Override
+	public Map<String, Object> getAgentGoals() {
+		return get("/v1/agent/goals");
+	}
+
+	@Override
+	public Map<String, Object> getAgentTree() {
+		return get("/v1/agent/tree");
+	}
+
+	@Override
+	public Map<String, Object> getAgentDialogue() {
+		return get("/v1/agent/dialogue");
+	}
+
+	@Override
+	public Map<String, Object> getAgentContext() {
+		return get("/v1/agent/context");
+	}
+
+	@Override
+	public Map<String, Object> listRecentAgentEvents(Long sinceSeqNo) {
+		if (sinceSeqNo == null) {
+			return get("/v1/agent/events/recent");
+		}
+		return get("/v1/agent/events/recent?since=" + sinceSeqNo.longValue());
+	}
+
+	@Override
+	public Map<String, Object> triggerAgentCompaction(boolean wait, Integer timeoutMs) {
+		Map<String, Object> body = new LinkedHashMap<>();
+		body.put("wait", wait);
+		if (timeoutMs != null) {
+			body.put("timeoutMs", timeoutMs);
+		}
+		return send("POST", "/v1/agent/debug/compact", body);
+	}
+
 	private Map<String, Object> get(String path) {
 		return send("GET", path, null);
 	}
@@ -246,6 +295,7 @@ final class HttpBridgeTransport implements MinecraftTransport {
 			case "/v1/camera/screenshot" -> SCREENSHOT_REQUEST_TIMEOUT;
 			case "/v1/vision/describe" -> VISION_REQUEST_TIMEOUT;
 			case "/v1/worlds/join", "/v1/servers/join" -> JOIN_REQUEST_TIMEOUT;
+			case "/v1/agent/debug/compact" -> DEBUG_COMPACTION_REQUEST_TIMEOUT;
 			default -> DEFAULT_REQUEST_TIMEOUT;
 		};
 	}

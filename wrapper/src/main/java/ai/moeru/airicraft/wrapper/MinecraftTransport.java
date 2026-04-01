@@ -42,4 +42,20 @@ interface MinecraftTransport {
 	Map<String, Object> clearHighlight(String highlightId);
 
 	Map<String, Object> clearHighlights();
+
+	Map<String, Object> getAgentStatus();
+
+	Map<String, Object> getAgentSession();
+
+	Map<String, Object> getAgentGoals();
+
+	Map<String, Object> getAgentTree();
+
+	Map<String, Object> getAgentDialogue();
+
+	Map<String, Object> getAgentContext();
+
+	Map<String, Object> listRecentAgentEvents(Long sinceSeqNo);
+
+	Map<String, Object> triggerAgentCompaction(boolean wait, Integer timeoutMs);
 }

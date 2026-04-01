@@ -191,6 +191,41 @@ class HttpBridgeTransportTest {
 		}
 	}
 
+	@Test
+	void listRecentAgentEventsReadsPayload(@TempDir Path tempDir) throws Exception {
+		try (TestBridgeServer server = TestBridgeServer.start()) {
+			server.respondJson("/v1/agent/events/recent", 0, 200, """
+				{"available":true,"oldestSeqNo":10,"latestSeqNo":12,"truncated":false,"events":[]}
+				""");
+			writeBridgeState(tempDir, server.port());
+			System.setProperty("user.home", tempDir.toString());
+
+			HttpBridgeTransport transport = new HttpBridgeTransport();
+			Map<String, Object> payload = transport.listRecentAgentEvents(11L);
+
+			assertEquals(true, payload.get("available"));
+			assertEquals(12, ((Number) payload.get("latestSeqNo")).intValue());
+			assertEquals(1, server.requestCount("/v1/agent/events/recent"));
+		}
+	}
+
+	@Test
+	void agentDebugCompactUsesLongerTimeout(@TempDir Path tempDir) throws Exception {
+		try (TestBridgeServer server = TestBridgeServer.start()) {
+			server.respondJson("/v1/agent/debug/compact", 2500, 200, """
+				{"available":true,"started":true,"completed":true,"timeoutMs":5000}
+				""");
+			writeBridgeState(tempDir, server.port());
+			System.setProperty("user.home", tempDir.toString());
+
+			HttpBridgeTransport transport = new HttpBridgeTransport();
+			Map<String, Object> payload = transport.triggerAgentCompaction(true, 5000);
+
+			assertEquals(true, payload.get("started"));
+			assertEquals(1, server.requestCount("/v1/agent/debug/compact"));
+		}
+	}
+
 	private static void writeBridgeState(Path tempDir) throws Exception {
 		writeBridgeState(tempDir, 1);
 	}
