@@ -5,25 +5,32 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.LongSupplier;
 
 public final class SemanticEventBuffer {
 	private final int capacity;
+	private final LongSupplier clock;
 	private final List<SemanticEvent> events = new ArrayList<>();
 
 	private long nextSeqNo = 1L;
 	private long droppedCount;
 
 	public SemanticEventBuffer(int capacity) {
+		this(capacity, System::currentTimeMillis);
+	}
+
+	public SemanticEventBuffer(int capacity, LongSupplier clock) {
 		if (capacity <= 0) {
 			throw new IllegalArgumentException("capacity must be positive");
 		}
 		this.capacity = capacity;
+		this.clock = Objects.requireNonNull(clock, "clock");
 	}
 
 	public SemanticEvent append(long tick, String type, Map<String, Object> payload) {
 		Objects.requireNonNull(type, "type");
 		Map<String, Object> safePayload = payload == null ? Map.of() : new LinkedHashMap<>(payload);
-		SemanticEvent event = new SemanticEvent(nextSeqNo++, tick, type, Map.copyOf(safePayload));
+		SemanticEvent event = new SemanticEvent(nextSeqNo++, tick, clock.getAsLong(), type, Map.copyOf(safePayload));
 		if (events.size() == capacity) {
 			events.remove(0);
 			droppedCount++;

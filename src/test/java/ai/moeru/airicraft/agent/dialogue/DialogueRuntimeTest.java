@@ -29,7 +29,7 @@ class DialogueRuntimeTest {
 			new PlannerIntent("set_goal", GoalType.FOLLOW_PLAYER, "Alice")
 		));
 
-		runtime.onPlayerChat("Alice", "@agent follow me", 10L, SessionSnapshot.initial(), "Alice", Optional.empty());
+		runtime.onPlayerChat("Alice", "@agent follow me", 10L, SessionSnapshot.initial(), "Alice", Optional.empty(), eventBuffer);
 		DialogueResponse response = awaitResponse(runtime, eventBuffer, Duration.ofSeconds(1));
 
 		assertEquals("Sure, I'll follow you!", response.text());
@@ -46,7 +46,7 @@ class DialogueRuntimeTest {
 
 		for (long tick = 1L; tick <= 3L; tick++) {
 			backend.injectTimeout();
-			runtime.onPlayerChat("Alice", "@agent follow me", tick, SessionSnapshot.initial(), "Alice", Optional.empty());
+			runtime.onPlayerChat("Alice", "@agent follow me", tick, SessionSnapshot.initial(), "Alice", Optional.empty(), eventBuffer);
 			awaitFailureProcessed(runtime, eventBuffer, tick, Duration.ofSeconds(1));
 		}
 

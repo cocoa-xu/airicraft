@@ -19,12 +19,17 @@ import ai.moeru.airicraft.agent.follow.FollowState;
 import ai.moeru.airicraft.agent.goals.GoalDirector;
 import ai.moeru.airicraft.agent.goals.GoalSnapshot;
 import ai.moeru.airicraft.agent.goals.GoalType;
+import ai.moeru.airicraft.agent.llm.CompactionExecutionResult;
 import ai.moeru.airicraft.agent.llm.CurrentViewVisionService;
 import ai.moeru.airicraft.agent.llm.LlmBackendException;
+import ai.moeru.airicraft.agent.llm.OpenAiCompatibleChatClient;
 import ai.moeru.airicraft.agent.llm.OpenAiCompatibleLlmBackend;
 import ai.moeru.airicraft.agent.llm.OpenAiCompatibleVisionBackend;
+import ai.moeru.airicraft.agent.llm.PlannerContextAggregator;
 import ai.moeru.airicraft.agent.llm.PlannerExecutor;
 import ai.moeru.airicraft.agent.llm.PlannerIntent;
+import ai.moeru.airicraft.agent.llm.PlannerCompactionService;
+import ai.moeru.airicraft.agent.llm.PlannerOrchestratorDebugSnapshot;
 import ai.moeru.airicraft.agent.llm.PlannerOrchestrator;
 import ai.moeru.airicraft.agent.llm.PlannerResponse;
 import ai.moeru.airicraft.agent.llm.VisionDescription;
@@ -61,6 +66,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
+import java.time.Clock;
 
 public final class EmbodiedAgentRuntime {
 	static final long CHAT_ECHO_SUPPRESSION_TICKS = 40L;
@@ -101,12 +107,16 @@ public final class EmbodiedAgentRuntime {
 			new OpenAiCompatibleVisionBackend(config.llm()),
 			MinecraftClient::getInstance
 		);
+		Clock clock = Clock.systemDefaultZone();
 		this.dialogueRuntime = new DialogueRuntime(
 			new PlannerOrchestrator(
 				new PlannerExecutor(new OpenAiCompatibleLlmBackend(config.llm())),
+				new PlannerCompactionService(new OpenAiCompatibleChatClient(config.llm())),
+				new PlannerContextAggregator(clock, config.llm().plannerCompactionTriggerTokens()),
 				visionService
 			),
-			config.llm().maxRecentConversationTurns()
+			config.llm().maxRecentConversationTurns(),
+			clock
 		);
 		registerDefaultScenarios();
 	}
@@ -281,6 +291,18 @@ public final class EmbodiedAgentRuntime {
 		return dialogueRuntime.isDegraded();
 	}
 
+	public PlannerOrchestratorDebugSnapshot plannerDebugSnapshot() {
+		return dialogueRuntime.plannerDebugSnapshot();
+	}
+
+	public boolean startDebugCompaction() {
+		return dialogueRuntime.startDebugCompaction();
+	}
+
+	public CompactionExecutionResult pollDebugCompaction() {
+		return dialogueRuntime.pollDebugCompaction();
+	}
+
 	public long lastChatTick() {
 		return chatService.lastChatTick();
 	}
@@ -317,16 +339,17 @@ public final class EmbodiedAgentRuntime {
 				return;
 			}
 
-			dialogueRuntime.onPlayerChat(
-				plannerSender,
-				plainTextMessage,
-				tickCount,
-				sessionSnapshot,
-				primaryInteractionResolver.current().map(PrimaryInteractionPlayer::name).orElse(null),
-				goalDirector.activeGoal()
-			);
-			return;
-		}
+				dialogueRuntime.onPlayerChat(
+					plannerSender,
+					plainTextMessage,
+					tickCount,
+					sessionSnapshot,
+					primaryInteractionResolver.current().map(PrimaryInteractionPlayer::name).orElse(null),
+					goalDirector.activeGoal(),
+					eventBuffer
+				);
+				return;
+			}
 
 		chatIngestService.ingest(
 			senderName,
@@ -344,16 +367,17 @@ public final class EmbodiedAgentRuntime {
 		boolean plannerEligibleChat = ChatIngestService.isAddressedToAgent(plainTextMessage)
 			|| proactiveSocialModeEnabled();
 		if (plannerEligibleChat && playerChatWithinConfiguredDistance(senderName)) {
-			dialogueRuntime.onPlayerChat(
-				senderName,
-				plainTextMessage,
-				tickCount,
-				sessionSnapshot,
-				primaryInteractionResolver.current().map(PrimaryInteractionPlayer::name).orElse(null),
-				goalDirector.activeGoal()
-			);
+				dialogueRuntime.onPlayerChat(
+					senderName,
+					plainTextMessage,
+					tickCount,
+					sessionSnapshot,
+					primaryInteractionResolver.current().map(PrimaryInteractionPlayer::name).orElse(null),
+					goalDirector.activeGoal(),
+					eventBuffer
+				);
+			}
 		}
-	}
 
 	public void onSystemChatReceived(String plainTextMessage) {
 		if (!airicraftConfig.readSystemChatMessages()) {
@@ -368,15 +392,16 @@ public final class EmbodiedAgentRuntime {
 			return;
 		}
 
-		dialogueRuntime.onPlayerChat(
-			"server",
-			plainTextMessage,
-			tickCount,
-			sessionSnapshot,
-			primaryInteractionResolver.current().map(PrimaryInteractionPlayer::name).orElse(null),
-			goalDirector.activeGoal()
-		);
-	}
+			dialogueRuntime.onPlayerChat(
+				"server",
+				plainTextMessage,
+				tickCount,
+				sessionSnapshot,
+				primaryInteractionResolver.current().map(PrimaryInteractionPlayer::name).orElse(null),
+				goalDirector.activeGoal(),
+				eventBuffer
+			);
+		}
 
 	public void onPlayerJoinedGame(UUID playerUuid, String playerName) {
 		if (playerUuid == null || playerName == null || playerName.isBlank()) {
@@ -540,15 +565,16 @@ public final class EmbodiedAgentRuntime {
 			return;
 		}
 
-		dialogueRuntime.onPlayerChat(
-			"server",
-			plainTextMessage,
-			tickCount,
-			sessionSnapshot,
-			primaryInteractionResolver.current().map(PrimaryInteractionPlayer::name).orElse(null),
-			goalDirector.activeGoal()
-		);
-	}
+			dialogueRuntime.onPlayerChat(
+				"server",
+				plainTextMessage,
+				tickCount,
+				sessionSnapshot,
+				primaryInteractionResolver.current().map(PrimaryInteractionPlayer::name).orElse(null),
+				goalDirector.activeGoal(),
+				eventBuffer
+			);
+		}
 
 	private boolean isLocalPlayer(UUID playerUuid, String playerName) {
 		MinecraftClient client = MinecraftClient.getInstance();

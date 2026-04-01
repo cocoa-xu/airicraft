@@ -1,7 +1,7 @@
 package ai.moeru.airicraft.agent.llm;
 
 public interface LlmBackend {
-	PlannerResponse generate(PlannerRequest request) throws LlmBackendException;
+	LlmCallResult<PlannerResponse> generate(LlmConversation conversation) throws LlmBackendException;
 
 	void injectMockResponse(PlannerResponse response);
 

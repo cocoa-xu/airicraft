@@ -1,8 +1,7 @@
 package ai.moeru.airicraft.agent.llm;
 
-public record PlannerExecutionResult(
-	PlannerRequest request,
-	PlannerResponse response,
+public record CompactionExecutionResult(
+	CompactionCheckpoint checkpoint,
 	LlmUsageSnapshot usage,
 	LlmFailureType failureType,
 	String failureMessage

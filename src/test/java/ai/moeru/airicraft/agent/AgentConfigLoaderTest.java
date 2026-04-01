@@ -29,6 +29,7 @@ class AgentConfigLoaderTest {
 		assertEquals("vision-key", parsed.llm().visionApiKey());
 		assertEquals("", parsed.llm().visionModel());
 		assertEquals(7777, parsed.llm().visionRequestTimeoutMillis());
+		assertEquals(65_536, parsed.llm().plannerCompactionTriggerTokens());
 		assertEquals("high", parsed.llm().visionImageDetail());
 		assertFalse(parsed.llm().visionConfigured());
 	}

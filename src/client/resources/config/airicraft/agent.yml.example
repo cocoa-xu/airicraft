@@ -26,5 +26,8 @@ visionRequestTimeoutMillis: 10000
 # Number of recent dialogue turns retained in planner context.
 maxRecentConversationTurns: 8
 
+# Trigger a context compaction checkpoint once the planner input prompt reaches this many tokens.
+plannerCompactionTriggerTokens: 65536
+
 # Image detail hint passed to compatible multimodal providers: low | high | auto
 visionImageDetail: "low"

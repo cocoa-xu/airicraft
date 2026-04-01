@@ -3,6 +3,7 @@ package ai.moeru.airicraft.agent.events;
 import org.junit.jupiter.api.Test;
 
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -10,7 +11,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class SemanticEventBufferTest {
 	@Test
 	void querySinceFiltersAndMarksTruncationAfterRollover() {
-		SemanticEventBuffer buffer = new SemanticEventBuffer(3);
+		AtomicLong now = new AtomicLong(1_000L);
+		SemanticEventBuffer buffer = new SemanticEventBuffer(3, now::getAndIncrement);
 		buffer.append(1L, "a", Map.of("value", 1));
 		buffer.append(2L, "b", Map.of("value", 2));
 		buffer.append(3L, "c", Map.of("value", 3));
@@ -27,18 +29,21 @@ class SemanticEventBufferTest {
 
 	@Test
 	void queryWithoutSinceReturnsCurrentBuffer() {
-		SemanticEventBuffer buffer = new SemanticEventBuffer(3);
+		AtomicLong now = new AtomicLong(2_000L);
+		SemanticEventBuffer buffer = new SemanticEventBuffer(3, now::getAndIncrement);
 		buffer.append(10L, "session.world_loaded", Map.of());
 
 		SemanticEventQueryResult result = buffer.query(null);
 		assertEquals(1, result.events().size());
 		assertEquals("session.world_loaded", result.events().get(0).type());
+		assertEquals(2_000L, result.events().get(0).timestampMs());
 		assertTrue(!result.truncated());
 	}
 
 	@Test
 	void containsAndCountsSinceFilterByTypeAndPlayer() {
-		SemanticEventBuffer buffer = new SemanticEventBuffer(8);
+		AtomicLong now = new AtomicLong(3_000L);
+		SemanticEventBuffer buffer = new SemanticEventBuffer(8, now::getAndIncrement);
 		buffer.append(1L, "social.player_spoke", Map.of("player", "Alice"));
 		buffer.append(2L, "social.player_spoke", Map.of("player", "Bob"));
 		buffer.append(3L, "social.player_spoke", Map.of("player", "Alice"));

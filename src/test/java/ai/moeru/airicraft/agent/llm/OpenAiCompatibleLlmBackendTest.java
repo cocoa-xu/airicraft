@@ -9,24 +9,25 @@ import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-class OpenAiCompatibleVisionBackendTest {
+class OpenAiCompatibleLlmBackendTest {
 	@Test
-	void describeBuildsMultimodalChatRequestAndParsesTextResponse() throws Exception {
+	void generateParsesPlannerResponseAndUsage() throws Exception {
 		AtomicReference<String> bodyRef = new AtomicReference<>();
 		try (TestServer server = TestServer.start(bodyRef)) {
-			OpenAiCompatibleVisionBackend backend = new OpenAiCompatibleVisionBackend(new AgentConfig.LlmConfig(
-				"http://127.0.0.1:1",
+			OpenAiCompatibleLlmBackend backend = new OpenAiCompatibleLlmBackend(new AgentConfig.LlmConfig(
+				"http://127.0.0.1:" + server.port(),
 				"planner-key",
 				"planner-model",
-				"http://127.0.0.1:" + server.port(),
-				"vision-key",
-				"gpt-4.1-mini",
+				"https://api.openai.com/v1",
+				"",
+				"",
 				15_000,
 				10_000,
 				8,
@@ -34,23 +35,20 @@ class OpenAiCompatibleVisionBackendTest {
 				"low"
 			));
 
-			VisionDescription description = backend.describe(new VisionRequest(
-				"Describe the current view.",
-				"image/png",
-				new byte[]{1, 2, 3},
-				1234L
-			));
+			LlmCallResult<PlannerResponse> result = backend.generate(LlmConversation.of(List.of(
+				LlmChatMessage.system("system"),
+				LlmChatMessage.user("Alice said just now: @agent follow me", LlmMessageKind.USER_TURN)
+			)));
 
-			assertEquals("A birch forest under open sky.", description.text());
-			assertEquals("gpt-4.1-mini", description.model());
-			assertEquals(1234L, description.capturedAtMs());
+			assertEquals("Sure, I'll follow you.", result.payload().replyText());
+			assertEquals("set_goal", result.payload().intent().type());
+			assertEquals(Integer.valueOf(1234), result.usage().promptTokens());
+			assertEquals(Integer.valueOf(56), result.usage().completionTokens());
+			assertEquals(Integer.valueOf(1290), result.usage().totalTokens());
 
 			String body = bodyRef.get();
-			assertTrue(body.contains("\"model\":\"gpt-4.1-mini\""));
-			assertTrue(body.contains("\"type\":\"image_url\""));
-			assertTrue(body.contains("\"detail\":\"low\""));
-			assertTrue(body.contains("data:image/png;base64,AQID"));
-			assertTrue(body.contains("Describe the current view."));
+			assertTrue(body.contains("\"role\":\"system\""));
+			assertTrue(body.contains("Alice said just now"));
 		}
 	}
 
@@ -76,10 +74,15 @@ class OpenAiCompatibleVisionBackendTest {
 				  "choices": [
 				    {
 				      "message": {
-				        "content": "A birch forest under open sky."
+				        "content": "{\\"replyText\\":\\"Sure, I'll follow you.\\",\\"intent\\":{\\"type\\":\\"set_goal\\",\\"goalType\\":\\"FOLLOW_PLAYER\\",\\"targetPlayer\\":\\"Alice\\"},\\"toolRequest\\":null}"
 				      }
 				    }
-				  ]
+				  ],
+				  "usage": {
+				    "prompt_tokens": 1234,
+				    "completion_tokens": 56,
+				    "total_tokens": 1290
+				  }
 				}
 				""");
 		}

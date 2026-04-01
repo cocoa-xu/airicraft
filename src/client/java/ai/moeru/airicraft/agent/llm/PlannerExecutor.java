@@ -10,7 +10,7 @@ public final class PlannerExecutor {
 	private final LlmBackend llmBackend;
 	private final ExecutorService executorService;
 
-	private CompletableFuture<PlannerResponse> inFlight;
+	private CompletableFuture<LlmCallResult<PlannerResponse>> inFlight;
 	private PlannerRequest inFlightRequest;
 
 	public PlannerExecutor(LlmBackend llmBackend) {
@@ -30,8 +30,9 @@ public final class PlannerExecutor {
 		return inFlight != null;
 	}
 
-	public boolean submit(PlannerRequest request) {
+	public boolean submit(PlannerRequest request, LlmConversation conversation) {
 		Objects.requireNonNull(request, "request");
+		Objects.requireNonNull(conversation, "conversation");
 		if (inFlight != null) {
 			return false;
 		}
@@ -39,7 +40,7 @@ public final class PlannerExecutor {
 		inFlightRequest = request;
 		inFlight = CompletableFuture.supplyAsync(() -> {
 			try {
-				return llmBackend.generate(request);
+				return llmBackend.generate(conversation);
 			}
 			catch (LlmBackendException exception) {
 				throw new CompletionException(exception);
@@ -54,21 +55,23 @@ public final class PlannerExecutor {
 		}
 
 		PlannerRequest request = inFlightRequest;
-		CompletableFuture<PlannerResponse> completedFuture = inFlight;
+		CompletableFuture<LlmCallResult<PlannerResponse>> completedFuture = inFlight;
 		inFlight = null;
 		inFlightRequest = null;
 
 		try {
-			return new PlannerExecutionResult(request, completedFuture.join(), null, null);
+			LlmCallResult<PlannerResponse> result = completedFuture.join();
+			return new PlannerExecutionResult(request, result.payload(), result.usage(), null, null);
 		}
 		catch (CompletionException exception) {
 			Throwable cause = exception.getCause();
 			if (cause instanceof LlmBackendException backendException) {
-				return new PlannerExecutionResult(request, null, backendException.failureType(), backendException.getMessage());
+				return new PlannerExecutionResult(request, null, LlmUsageSnapshot.unknown(), backendException.failureType(), backendException.getMessage());
 			}
 			return new PlannerExecutionResult(
 				request,
 				null,
+				LlmUsageSnapshot.unknown(),
 				LlmFailureType.PROVIDER_ERROR,
 				cause == null ? exception.getMessage() : cause.getMessage()
 			);

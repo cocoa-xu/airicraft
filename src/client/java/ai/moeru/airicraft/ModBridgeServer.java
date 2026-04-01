@@ -51,6 +51,9 @@ public final class ModBridgeServer {
 	private static final Gson GSON = new GsonBuilder().disableHtmlEscaping().create();
 	private static final SecureRandom RANDOM = new SecureRandom();
 	private static final long SCREENSHOT_CAPTURE_TIMEOUT_MILLIS = 5_000L;
+	private static final long DEBUG_COMPACTION_DEFAULT_TIMEOUT_MILLIS = 30_000L;
+	private static final long DEBUG_COMPACTION_MAX_TIMEOUT_MILLIS = 120_000L;
+	private static final long DEBUG_COMPACTION_POLL_INTERVAL_MILLIS = 25L;
 
 	private final HighlightManager highlightManager;
 	private final EmbodiedAgentRuntime agentRuntime;
@@ -97,11 +100,13 @@ public final class ModBridgeServer {
 			httpServer.createContext("/v1/agent/status", exchange -> handleJson(exchange, this::createAgentStatusResponse));
 			httpServer.createContext("/v1/agent/session", exchange -> handleJson(exchange, this::createAgentSessionResponse));
 			httpServer.createContext("/v1/agent/session/open-lan", this::handleAgentOpenLan);
-			httpServer.createContext("/v1/agent/events/recent", exchange -> handleJson(exchange, () -> createRecentAgentEventsResponse(exchange)));
-			httpServer.createContext("/v1/agent/goals", exchange -> handleJson(exchange, this::createAgentGoalsResponse));
-			httpServer.createContext("/v1/agent/tree", exchange -> handleJson(exchange, this::createAgentTreeResponse));
-			httpServer.createContext("/v1/agent/dialogue", exchange -> handleJson(exchange, this::createAgentDialogueResponse));
-			httpServer.createContext("/v1/verification/results", exchange -> handleJson(exchange, this::createVerificationResultsResponse));
+				httpServer.createContext("/v1/agent/events/recent", exchange -> handleJson(exchange, () -> createRecentAgentEventsResponse(exchange)));
+				httpServer.createContext("/v1/agent/goals", exchange -> handleJson(exchange, this::createAgentGoalsResponse));
+				httpServer.createContext("/v1/agent/tree", exchange -> handleJson(exchange, this::createAgentTreeResponse));
+				httpServer.createContext("/v1/agent/dialogue", exchange -> handleJson(exchange, this::createAgentDialogueResponse));
+				httpServer.createContext("/v1/agent/context", exchange -> handleJson(exchange, this::createAgentContextResponse));
+				httpServer.createContext("/v1/agent/debug/compact", this::handleAgentDebugCompact);
+				httpServer.createContext("/v1/verification/results", exchange -> handleJson(exchange, this::createVerificationResultsResponse));
 			httpServer.createContext("/v1/verification/run", this::handleVerificationRun);
 			httpServer.start();
 
@@ -367,6 +372,50 @@ public final class ModBridgeServer {
 		});
 	}
 
+	private void handleAgentDebugCompact(HttpExchange exchange) throws IOException {
+		handleJsonBody(exchange, "POST", DebugCompactRequest.class, request -> {
+			boolean wait = request == null || request.waitValue() == null || request.waitValue();
+			long timeoutMillis = requestedDebugCompactionTimeoutMillis(request == null ? null : request.timeoutMs());
+			boolean started = onClientThread(() -> {
+				if (!agentRuntime.llmAvailable()) {
+					throw new BridgeUnavailableException("planner_unavailable", "Planner LLM is not configured");
+				}
+				if (!agentRuntime.startDebugCompaction()) {
+					throw new BridgeUnavailableException("planner_busy", "Planner is busy with another request");
+				}
+				return true;
+			});
+			if (!wait) {
+				return agentDebugCompactPayload(started, false, timeoutMillis);
+			}
+
+			long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
+			while (System.nanoTime() < deadline) {
+				var snapshot = onClientThread(() -> {
+					agentRuntime.pollDebugCompaction();
+					return agentRuntime.plannerDebugSnapshot();
+				});
+				if (!snapshot.compactionInFlight() && snapshot.lastCompactionResult() != null) {
+					if (!snapshot.lastCompactionResult().succeeded()) {
+						throw new BridgeUnavailableException(
+							compactionFailureCode(snapshot.lastCompactionResult().failureType()),
+							nonEmpty(snapshot.lastCompactionResult().failureMessage(), "Planner compaction failed")
+						);
+					}
+					return agentDebugCompactPayload(true, true, timeoutMillis);
+				}
+				try {
+					Thread.sleep(DEBUG_COMPACTION_POLL_INTERVAL_MILLIS);
+				}
+				catch (InterruptedException exception) {
+					Thread.currentThread().interrupt();
+					throw new BridgeUnavailableException("bridge_interrupted", "Compaction wait interrupted");
+				}
+			}
+			throw new BridgeUnavailableException("compaction_timeout", "Timed out waiting for planner compaction");
+		});
+	}
+
 	private void handleJson(HttpExchange exchange, Supplier<Object> supplier) throws IOException {
 		if (!authorize(exchange)) {
 			writeJson(exchange, 401, Map.of("error", "unauthorized", "message", "Invalid bridge token"));
@@ -565,6 +614,15 @@ public final class ModBridgeServer {
 			response.put("dialogue", agentRuntime.dialogueSnapshot());
 			response.put("lastChatTick", agentRuntime.lastChatTick());
 			response.put("lastChatText", agentRuntime.lastChatText());
+			return response;
+		});
+	}
+
+	private Object createAgentContextResponse() {
+		return onClientThread(() -> {
+			Map<String, Object> response = new LinkedHashMap<>();
+			response.put("available", true);
+			response.put("planner", agentRuntime.plannerDebugSnapshot());
 			return response;
 		});
 	}
@@ -783,6 +841,42 @@ public final class ModBridgeServer {
 		return client.world != null && client.player != null ? "in_world" : "out_of_world";
 	}
 
+	private Object agentDebugCompactPayload(boolean started, boolean completed, long timeoutMillis) {
+		Map<String, Object> response = new LinkedHashMap<>();
+		response.put("available", true);
+		response.put("started", started);
+		response.put("completed", completed);
+		response.put("timeoutMs", timeoutMillis);
+		response.put("planner", agentRuntime.plannerDebugSnapshot());
+		return response;
+	}
+
+	private static long requestedDebugCompactionTimeoutMillis(Integer timeoutMs) {
+		if (timeoutMs == null) {
+			return DEBUG_COMPACTION_DEFAULT_TIMEOUT_MILLIS;
+		}
+		if (timeoutMs <= 0) {
+			throw new BridgeUnavailableException("invalid_request", "timeoutMs must be positive");
+		}
+		return Math.min(timeoutMs.longValue(), DEBUG_COMPACTION_MAX_TIMEOUT_MILLIS);
+	}
+
+	private static String compactionFailureCode(ai.moeru.airicraft.agent.llm.LlmFailureType failureType) {
+		if (failureType == null) {
+			return "planner_compaction_failed";
+		}
+		return switch (failureType) {
+			case PROVIDER_UNAVAILABLE -> "planner_unavailable";
+			case TIMEOUT -> "planner_timeout";
+			case PROVIDER_ERROR -> "planner_provider_error";
+			case PARSE_ERROR -> "planner_parse_error";
+		};
+	}
+
+	private static String nonEmpty(String value, String fallback) {
+		return value == null || value.isBlank() ? fallback : value;
+	}
+
 	private boolean authorize(HttpExchange exchange) {
 		Headers headers = exchange.getRequestHeaders();
 		var authorization = headers.getFirst("Authorization");
@@ -984,6 +1078,19 @@ public final class ModBridgeServer {
 	}
 
 	private record VisionDescribeRequest(String prompt) {
+	}
+
+	private static final class DebugCompactRequest {
+		private Boolean wait;
+		private Integer timeoutMs;
+
+		private Boolean waitValue() {
+			return wait;
+		}
+
+		private Integer timeoutMs() {
+			return timeoutMs;
+		}
 	}
 
 }

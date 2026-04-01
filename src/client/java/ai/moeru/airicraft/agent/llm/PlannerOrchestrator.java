@@ -2,6 +2,8 @@ package ai.moeru.airicraft.agent.llm;
 
 import ai.moeru.airicraft.Airicraft;
 import ai.moeru.airicraft.BridgeUnavailableException;
+import ai.moeru.airicraft.agent.dialogue.DialogueTurn;
+import ai.moeru.airicraft.agent.events.SemanticEvent;
 
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
@@ -9,14 +11,24 @@ import java.util.concurrent.CompletionException;
 
 public final class PlannerOrchestrator {
 	private final PlannerExecutor plannerExecutor;
+	private final PlannerCompactionService compactionService;
+	private final PlannerContextAggregator contextAggregator;
 	private final CurrentViewVisionTool visionTool;
 
 	private PlannerRequest baseRequest;
 	private boolean toolUsed;
 	private CompletableFuture<String> toolResultFuture;
+	private CompactionExecutionResult lastCompactionResult;
 
-	public PlannerOrchestrator(PlannerExecutor plannerExecutor, CurrentViewVisionTool visionTool) {
+	public PlannerOrchestrator(
+		PlannerExecutor plannerExecutor,
+		PlannerCompactionService compactionService,
+		PlannerContextAggregator contextAggregator,
+		CurrentViewVisionTool visionTool
+	) {
 		this.plannerExecutor = Objects.requireNonNull(plannerExecutor, "plannerExecutor");
+		this.compactionService = Objects.requireNonNull(compactionService, "compactionService");
+		this.contextAggregator = Objects.requireNonNull(contextAggregator, "contextAggregator");
 		this.visionTool = Objects.requireNonNull(visionTool, "visionTool");
 	}
 
@@ -25,7 +37,21 @@ public final class PlannerOrchestrator {
 	}
 
 	public boolean hasInFlight() {
-		return plannerExecutor.hasInFlight() || toolResultFuture != null;
+		return plannerExecutor.hasInFlight() || compactionService.hasInFlight() || toolResultFuture != null;
+	}
+
+	public PlannerOrchestratorDebugSnapshot debugSnapshot() {
+		return new PlannerOrchestratorDebugSnapshot(
+			isConfigured(),
+			hasInFlight(),
+			plannerExecutor.hasInFlight(),
+			compactionService.hasInFlight(),
+			toolResultFuture != null,
+			toolUsed,
+			baseRequest,
+			lastCompactionResult,
+			contextAggregator.debugSnapshot()
+		);
 	}
 
 	public boolean submit(PlannerRequest request) {
@@ -36,10 +62,37 @@ public final class PlannerOrchestrator {
 
 		baseRequest = request;
 		toolUsed = false;
-		return plannerExecutor.submit(request);
+		if (contextAggregator.compactionPending()) {
+			return compactionService.submit(contextAggregator.buildCompactionConversation());
+		}
+		return submitPlannerConversation(request);
 	}
 
 	public PlannerExecutionResult poll() {
+		if (compactionService.hasInFlight()) {
+			CompactionExecutionResult compactionResult = compactionService.poll();
+			if (compactionResult == null) {
+				return null;
+			}
+			completeCompaction(compactionResult);
+			if (baseRequest == null) {
+				clearState();
+				return null;
+			}
+			if (!submitPlannerConversation(baseRequest)) {
+				PlannerExecutionResult failure = new PlannerExecutionResult(
+					baseRequest,
+					null,
+					LlmUsageSnapshot.unknown(),
+					LlmFailureType.PROVIDER_ERROR,
+					"Planner request could not be submitted after compaction"
+				);
+				clearState();
+				return failure;
+			}
+			return null;
+		}
+
 		if (toolResultFuture != null) {
 			if (!toolResultFuture.isDone()) {
 				return null;
@@ -56,6 +109,7 @@ public final class PlannerOrchestrator {
 			return plannerResult;
 		}
 
+		contextAggregator.recordUsage(plannerResult.usage());
 		PlannerToolRequest toolRequest = plannerResult.response().toolRequest();
 		if (toolRequest == null) {
 			clearState();
@@ -100,12 +154,6 @@ public final class PlannerOrchestrator {
 		}
 
 		toolUsed = true;
-		Airicraft.LOGGER.info(
-			"Planner requested tool type={} sender={} prompt={}",
-			toolRequest.type(),
-			baseRequest == null ? null : baseRequest.senderName(),
-			summarizeForLog(toolRequest.prompt())
-		);
 		toolResultFuture = requestVisionTool(toolRequest.prompt());
 		return null;
 	}
@@ -118,25 +166,63 @@ public final class PlannerOrchestrator {
 		plannerExecutor.injectTimeout();
 	}
 
+	public void recordAssistantTurn(DialogueTurn turn) {
+		contextAggregator.recordAgentTurn(turn);
+	}
+
+	public void recordEvents(java.util.List<SemanticEvent> events, long anchorTimeMs) {
+		contextAggregator.recordEvents(events, anchorTimeMs);
+	}
+
+	public boolean startDebugCompaction() {
+		if (!isConfigured() || hasInFlight()) {
+			return false;
+		}
+		lastCompactionResult = null;
+		return compactionService.submit(contextAggregator.buildCompactionConversation());
+	}
+
+	public CompactionExecutionResult pollDebugCompaction() {
+		if (!compactionService.hasInFlight()) {
+			return lastCompactionResult;
+		}
+		CompactionExecutionResult compactionResult = compactionService.poll();
+		if (compactionResult == null) {
+			return null;
+		}
+		completeCompaction(compactionResult);
+		return compactionResult;
+	}
+
 	public void reset() {
 		clearState();
 		plannerExecutor.reset();
+		compactionService.reset();
+		contextAggregator.clear();
+		lastCompactionResult = null;
 	}
 
 	public void shutdown() {
 		reset();
 		plannerExecutor.shutdown();
+		compactionService.shutdown();
+	}
+
+	private boolean submitPlannerConversation(PlannerRequest request) {
+		LlmConversation conversation = request.toolResult() == null || request.toolResult().isBlank()
+			? contextAggregator.buildPlannerConversation(request)
+			: contextAggregator.buildPlannerFollowUpConversation(request.toolResult());
+		return plannerExecutor.submit(request, conversation);
 	}
 
 	private PlannerExecutionResult continueAfterTool() {
 		String toolResultText;
 		try {
 			toolResultText = toolResultFuture.join();
-			Airicraft.LOGGER.info("Planner tool result sender={} value={}", baseRequest.senderName(), summarizeForLog(toolResultText));
 		}
 		catch (CompletionException exception) {
 			toolResultText = "VISION_UNAVAILABLE: vision_failed";
-			Airicraft.LOGGER.warn("Planner tool future failed sender={}", baseRequest.senderName(), exception);
+			Airicraft.LOGGER.warn("Planner tool future failed sender={}", baseRequest == null ? null : baseRequest.senderName(), exception);
 		}
 		finally {
 			toolResultFuture = null;
@@ -144,37 +230,36 @@ public final class PlannerOrchestrator {
 
 		PlannerRequest followUpRequest = new PlannerRequest(
 			baseRequest.tick(),
+			baseRequest.timestampMs(),
 			baseRequest.sessionMode(),
 			baseRequest.primaryInteractionPlayer(),
 			baseRequest.activeGoal(),
-			baseRequest.recentTurns(),
 			baseRequest.senderName(),
 			baseRequest.message(),
 			toolResultText
 		);
-		if (!plannerExecutor.submit(followUpRequest)) {
-			Airicraft.LOGGER.warn("Planner follow-up submission failed sender={}", followUpRequest.senderName());
-			clearState();
-			return new PlannerExecutionResult(
+		if (!submitPlannerConversation(followUpRequest)) {
+			PlannerExecutionResult failure = new PlannerExecutionResult(
 				followUpRequest,
 				null,
+				LlmUsageSnapshot.unknown(),
 				LlmFailureType.PROVIDER_ERROR,
 				"Planner follow-up request could not be submitted"
 			);
+			clearState();
+			return failure;
 		}
 		return null;
 	}
 
 	private CompletableFuture<String> requestVisionTool(String prompt) {
 		if (!visionTool.isConfigured()) {
-			Airicraft.LOGGER.info("Vision tool unavailable: provider not configured");
 			return CompletableFuture.completedFuture("VISION_UNAVAILABLE: vision_provider_unavailable");
 		}
 
 		return visionTool.requestDescription(prompt)
 			.handle((description, throwable) -> {
 				if (throwable == null) {
-					Airicraft.LOGGER.info("Vision tool succeeded text={}", summarizeForLog(description.text()));
 					return description.text();
 				}
 				String code = visionFailureCode(throwable);
@@ -190,7 +275,18 @@ public final class PlannerOrchestrator {
 	}
 
 	private PlannerExecutionResult parseFailure(String message) {
-		return new PlannerExecutionResult(baseRequest, null, LlmFailureType.PARSE_ERROR, message);
+		return new PlannerExecutionResult(baseRequest, null, LlmUsageSnapshot.unknown(), LlmFailureType.PARSE_ERROR, message);
+	}
+
+	private void completeCompaction(CompactionExecutionResult compactionResult) {
+		lastCompactionResult = compactionResult;
+		if (compactionResult.succeeded()) {
+			contextAggregator.recordObservedUsage(compactionResult.usage());
+			contextAggregator.applyCheckpoint(compactionResult.checkpoint());
+			return;
+		}
+		Airicraft.LOGGER.warn("Planner compaction failed message={}", summarizeForLog(compactionResult.failureMessage()));
+		contextAggregator.onCompactionFailure();
 	}
 
 	private void clearState() {
@@ -217,16 +313,6 @@ public final class PlannerOrchestrator {
 	}
 
 	private static String summarizeForLog(String text) {
-		if (text == null) {
-			return "";
-		}
-		String normalized = text
-			.replace("\\", "\\\\")
-			.replace("\r", "\\r")
-			.replace("\n", "\\n");
-		if (normalized.length() > 600) {
-			return normalized.substring(0, 600) + "...";
-		}
-		return normalized;
+		return OpenAiCompatibleChatClient.summarizeForLog(text);
 	}
 }

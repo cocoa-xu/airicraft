@@ -2,14 +2,23 @@ package ai.moeru.airicraft.agent.llm;
 
 import ai.moeru.airicraft.BridgeUnavailableException;
 import ai.moeru.airicraft.agent.AgentConfig;
+import ai.moeru.airicraft.agent.dialogue.DialogueTurn;
 import ai.moeru.airicraft.agent.goals.GoalType;
+import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpServer;
 import ai.moeru.airicraft.agent.session.SessionMode;
 import org.junit.jupiter.api.Test;
 
+import java.io.IOException;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -24,10 +33,7 @@ class PlannerOrchestratorTest {
 			"Sure, I'll follow you.",
 			new PlannerIntent("set_goal", GoalType.FOLLOW_PLAYER, "Alice")
 		));
-		PlannerOrchestrator orchestrator = new PlannerOrchestrator(
-			new PlannerExecutor(backend),
-			CurrentViewVisionTool.disabled()
-		);
+		PlannerOrchestrator orchestrator = newOrchestrator(backend, CurrentViewVisionTool.disabled());
 
 		orchestrator.submit(baseRequest(null));
 		PlannerExecutionResult result = awaitResult(orchestrator);
@@ -49,8 +55,8 @@ class PlannerOrchestratorTest {
 			"I see a forested hill ahead.",
 			new PlannerIntent("reply_only", null, null)
 		));
-		PlannerOrchestrator orchestrator = new PlannerOrchestrator(
-			new PlannerExecutor(backend),
+		PlannerOrchestrator orchestrator = newOrchestrator(
+			backend,
 			new StubVisionTool(CompletableFuture.completedFuture(new VisionDescription(
 				"A birch forest hill under open sky.",
 				"gpt-4.1-mini",
@@ -79,8 +85,8 @@ class PlannerOrchestratorTest {
 			"I can see a beach and ocean nearby.",
 			new PlannerIntent("reply_only", null, null)
 		));
-		PlannerOrchestrator orchestrator = new PlannerOrchestrator(
-			new PlannerExecutor(backend),
+		PlannerOrchestrator orchestrator = newOrchestrator(
+			backend,
 			new StubVisionTool(CompletableFuture.completedFuture(new VisionDescription(
 				"A sandy beach next to the ocean under open sky.",
 				"gpt-4.1-mini",
@@ -109,8 +115,8 @@ class PlannerOrchestratorTest {
 			"I can't see clearly right now.",
 			new PlannerIntent("acknowledge_failure", null, null)
 		));
-		PlannerOrchestrator orchestrator = new PlannerOrchestrator(
-			new PlannerExecutor(backend),
+		PlannerOrchestrator orchestrator = newOrchestrator(
+			backend,
 			new StubVisionTool(CompletableFuture.failedFuture(
 				new BridgeUnavailableException("capture_timeout", "Screenshot capture timed out")
 			))
@@ -137,8 +143,8 @@ class PlannerOrchestratorTest {
 			new PlannerIntent("none", null, null),
 			new PlannerToolRequest("describe_current_view", "Describe the scene again.")
 		));
-		PlannerOrchestrator orchestrator = new PlannerOrchestrator(
-			new PlannerExecutor(backend),
+		PlannerOrchestrator orchestrator = newOrchestrator(
+			backend,
 			new StubVisionTool(CompletableFuture.completedFuture(new VisionDescription(
 				"A birch forest hill under open sky.",
 				"gpt-4.1-mini",
@@ -155,16 +161,60 @@ class PlannerOrchestratorTest {
 		assertNull(result.response());
 	}
 
+	@Test
+	void debugCompactionCompletesWithoutPlannerRequest() throws Exception {
+		try (CompactionTestServer server = CompactionTestServer.start()) {
+			AgentConfig.LlmConfig config = new AgentConfig.LlmConfig(
+				"http://127.0.0.1:" + server.port(),
+				"planner-key",
+				"planner-model",
+				"https://api.openai.com/v1",
+				"",
+				"",
+				15_000,
+				10_000,
+				8,
+				65_536,
+				"low"
+			);
+			PlannerOrchestrator orchestrator = new PlannerOrchestrator(
+				new PlannerExecutor(new OpenAiCompatibleLlmBackend(config)),
+				new PlannerCompactionService(new OpenAiCompatibleChatClient(config)),
+				new PlannerContextAggregator(Clock.systemDefaultZone(), config.plannerCompactionTriggerTokens()),
+				CurrentViewVisionTool.disabled()
+			);
+			orchestrator.recordAssistantTurn(new DialogueTurn("agent", "On it.", 10L, 1_000L));
+
+			assertTrue(orchestrator.startDebugCompaction());
+			awaitDebugCompaction(orchestrator);
+
+			PlannerOrchestratorDebugSnapshot snapshot = orchestrator.debugSnapshot();
+			assertTrue(snapshot.lastCompactionResult().succeeded());
+			assertEquals("follow Alice", snapshot.context().activeCheckpoint().activeGoal());
+			assertEquals(1, server.requestCount());
+		}
+	}
+
 	private static PlannerRequest baseRequest(String toolResult) {
 		return new PlannerRequest(
 			10L,
+			1_000L,
 			SessionMode.OUT_OF_WORLD,
 			"Alice",
 			null,
-			List.of(),
 			"Alice",
 			"@agent what do you see?",
 			toolResult
+		);
+	}
+
+	private static PlannerOrchestrator newOrchestrator(OpenAiCompatibleLlmBackend backend, CurrentViewVisionTool visionTool) {
+		AgentConfig.LlmConfig config = AgentConfig.LlmConfig.defaults();
+		return new PlannerOrchestrator(
+			new PlannerExecutor(backend),
+			new PlannerCompactionService(new OpenAiCompatibleChatClient(config)),
+			new PlannerContextAggregator(Clock.systemDefaultZone(), config.plannerCompactionTriggerTokens()),
+			visionTool
 		);
 	}
 
@@ -186,6 +236,25 @@ class PlannerOrchestratorTest {
 		throw new AssertionError("Timed out waiting for planner result");
 	}
 
+	private static void awaitDebugCompaction(PlannerOrchestrator orchestrator) {
+		Instant deadline = Instant.now().plus(Duration.ofSeconds(2));
+		while (Instant.now().isBefore(deadline)) {
+			orchestrator.poll();
+			PlannerOrchestratorDebugSnapshot snapshot = orchestrator.debugSnapshot();
+			if (!snapshot.compactionInFlight() && snapshot.lastCompactionResult() != null) {
+				return;
+			}
+			try {
+				Thread.sleep(10L);
+			}
+			catch (InterruptedException exception) {
+				Thread.currentThread().interrupt();
+				throw new AssertionError("Interrupted while waiting", exception);
+			}
+		}
+		throw new AssertionError("Timed out waiting for debug compaction");
+	}
+
 	private record StubVisionTool(CompletableFuture<VisionDescription> future) implements CurrentViewVisionTool {
 		@Override
 		public boolean isConfigured() {
@@ -196,5 +265,64 @@ class PlannerOrchestratorTest {
 		public CompletableFuture<VisionDescription> requestDescription(String prompt) {
 			return future;
 		}
+	}
+
+	private static final class CompactionTestServer implements AutoCloseable {
+		private final HttpServer server;
+		private int requestCount;
+
+		private CompactionTestServer(HttpServer server) {
+			this.server = server;
+		}
+
+		private static CompactionTestServer start() throws IOException {
+			HttpServer server = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
+			CompactionTestServer holder = new CompactionTestServer(server);
+			server.setExecutor(Executors.newCachedThreadPool());
+			server.createContext("/chat/completions", exchange -> holder.handle(exchange));
+			server.start();
+			return holder;
+		}
+
+		private void handle(HttpExchange exchange) throws IOException {
+			requestCount++;
+			writeResponse(exchange, 200, """
+				{
+				  "choices": [
+				    {
+				      "message": {
+				        "content": "{\\"time_anchor\\":\\"Tuesday afternoon\\",\\"session_state\\":\\"in world\\",\\"active_goal\\":\\"follow Alice\\",\\"active_commitments\\":[\\"follow Alice\\"],\\"durable_facts\\":[\\"Alice is nearby\\"],\\"relevant_people\\":[\\"Alice\\"],\\"open_loops\\":[\\"keep following\\"],\\"recent_timeline\\":[\\"Alice asked for follow\\"],\\"forgettable_noise\\":[]}"
+				      }
+				    }
+				  ],
+				  "usage": {
+				    "prompt_tokens": 2048,
+				    "completion_tokens": 128,
+				    "total_tokens": 2176
+				  }
+				}
+				""");
+		}
+
+		private int port() {
+			return server.getAddress().getPort();
+		}
+
+		private int requestCount() {
+			return requestCount;
+		}
+
+		@Override
+		public void close() {
+			server.stop(0);
+		}
+	}
+
+	private static void writeResponse(HttpExchange exchange, int statusCode, String body) throws IOException {
+		byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+		exchange.getResponseHeaders().set("Content-Type", "application/json");
+		exchange.sendResponseHeaders(statusCode, bytes.length);
+		exchange.getResponseBody().write(bytes);
+		exchange.close();
 	}
 }

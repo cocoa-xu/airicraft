@@ -3,15 +3,21 @@ package ai.moeru.airicraft.agent.dialogue;
 import ai.moeru.airicraft.agent.events.SemanticEventBuffer;
 import ai.moeru.airicraft.agent.goals.GoalSnapshot;
 import ai.moeru.airicraft.agent.llm.CurrentViewVisionTool;
+import ai.moeru.airicraft.agent.llm.CompactionExecutionResult;
 import ai.moeru.airicraft.agent.llm.LlmFailureType;
+import ai.moeru.airicraft.agent.llm.OpenAiCompatibleChatClient;
 import ai.moeru.airicraft.agent.llm.OpenAiCompatibleLlmBackend;
+import ai.moeru.airicraft.agent.llm.PlannerContextAggregator;
 import ai.moeru.airicraft.agent.llm.PlannerExecutionResult;
 import ai.moeru.airicraft.agent.llm.PlannerExecutor;
+import ai.moeru.airicraft.agent.llm.PlannerCompactionService;
+import ai.moeru.airicraft.agent.llm.PlannerOrchestratorDebugSnapshot;
 import ai.moeru.airicraft.agent.llm.PlannerOrchestrator;
 import ai.moeru.airicraft.agent.llm.PlannerRequest;
 import ai.moeru.airicraft.agent.llm.PlannerResponse;
 import ai.moeru.airicraft.agent.session.SessionSnapshot;
 
+import java.time.Clock;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -25,6 +31,7 @@ public final class DialogueRuntime {
 	private static final String PARSE_ERROR_MESSAGE = "I got confused for a moment.";
 
 	private final PlannerOrchestrator plannerOrchestrator;
+	private final Clock clock;
 	private final int maxRecentTurns;
 	private final List<DialogueTurn> recentTurns = new ArrayList<>();
 
@@ -37,22 +44,30 @@ public final class DialogueRuntime {
 	private long lastFailureTick = -1L;
 
 	public DialogueRuntime() {
-		this(
-			new PlannerOrchestrator(
-				new PlannerExecutor(new OpenAiCompatibleLlmBackend(ai.moeru.airicraft.agent.AgentConfig.LlmConfig.defaults())),
-				CurrentViewVisionTool.disabled()
-			),
-			8
-		);
+		this(defaultOrchestrator(ai.moeru.airicraft.agent.AgentConfig.LlmConfig.defaults(), Clock.systemDefaultZone()), 8, Clock.systemDefaultZone());
 	}
 
 	public DialogueRuntime(PlannerOrchestrator plannerOrchestrator, int maxRecentTurns) {
+		this(plannerOrchestrator, maxRecentTurns, Clock.systemDefaultZone());
+	}
+
+	public DialogueRuntime(PlannerOrchestrator plannerOrchestrator, int maxRecentTurns, Clock clock) {
 		this.plannerOrchestrator = plannerOrchestrator;
+		this.clock = clock;
 		this.maxRecentTurns = Math.max(1, maxRecentTurns);
 	}
 
 	public DialogueRuntime(PlannerExecutor plannerExecutor, int maxRecentTurns) {
-		this(new PlannerOrchestrator(plannerExecutor, CurrentViewVisionTool.disabled()), maxRecentTurns);
+		this(
+			new PlannerOrchestrator(
+				plannerExecutor,
+				new PlannerCompactionService(new OpenAiCompatibleChatClient(ai.moeru.airicraft.agent.AgentConfig.LlmConfig.defaults())),
+				new PlannerContextAggregator(Clock.systemDefaultZone(), ai.moeru.airicraft.agent.AgentConfig.LlmConfig.defaults().plannerCompactionTriggerTokens()),
+				CurrentViewVisionTool.disabled()
+			),
+			maxRecentTurns,
+			Clock.systemDefaultZone()
+		);
 	}
 
 	public void recordResponse(DialogueResponse response) {
@@ -78,6 +93,18 @@ public final class DialogueRuntime {
 
 	public boolean llmAvailable() {
 		return plannerOrchestrator.isConfigured();
+	}
+
+	public PlannerOrchestratorDebugSnapshot plannerDebugSnapshot() {
+		return plannerOrchestrator.debugSnapshot();
+	}
+
+	public boolean startDebugCompaction() {
+		return plannerOrchestrator.startDebugCompaction();
+	}
+
+	public CompactionExecutionResult pollDebugCompaction() {
+		return plannerOrchestrator.pollDebugCompaction();
 	}
 
 	public long lastFailureTick() {
@@ -116,7 +143,7 @@ public final class DialogueRuntime {
 			return false;
 		}
 
-		appendTurn(new DialogueTurn(senderName, plainTextMessage, tick));
+		appendTurn(new DialogueTurn(senderName, plainTextMessage, tick, clock.millis()));
 		eventBuffer.append(tick, "planner.reset_requested", Map.of(
 			"player", senderName
 		));
@@ -126,7 +153,7 @@ public final class DialogueRuntime {
 			new DialogueIntent(DialogueIntentType.ACKNOWLEDGE_FAILURE, null, senderName),
 			tick
 		));
-		appendTurn(new DialogueTurn(DialogueSpeakerLabels.AGENT, RESET_MESSAGE, tick));
+		appendTurn(new DialogueTurn(DialogueSpeakerLabels.AGENT, RESET_MESSAGE, tick, clock.millis()));
 		return true;
 	}
 
@@ -136,19 +163,22 @@ public final class DialogueRuntime {
 		long tick,
 		SessionSnapshot sessionSnapshot,
 		String primaryInteractionPlayer,
-		Optional<GoalSnapshot> activeGoal
+		Optional<GoalSnapshot> activeGoal,
+		SemanticEventBuffer eventBuffer
 	) {
-		appendTurn(new DialogueTurn(senderName, plainTextMessage, tick));
+		long timestampMs = clock.millis();
+		appendTurn(new DialogueTurn(senderName, plainTextMessage, tick, timestampMs));
 		if (degraded || plannerOrchestrator.hasInFlight()) {
 			return;
 		}
+		plannerOrchestrator.recordEvents(eventBuffer.query(null).events(), timestampMs);
 
 		plannerOrchestrator.submit(new PlannerRequest(
 			tick,
+			timestampMs,
 			sessionSnapshot.mode(),
 			primaryInteractionPlayer,
 			activeGoal.orElse(null),
-			List.copyOf(recentTurns),
 			senderName,
 			plainTextMessage,
 			null
@@ -189,7 +219,7 @@ public final class DialogueRuntime {
 		);
 		recordResponse(response);
 		if (response.text() != null && !response.text().isBlank()) {
-			appendTurn(new DialogueTurn(DialogueSpeakerLabels.AGENT, response.text(), tick));
+			recordAgentTurn(response.text(), tick);
 		}
 		return response;
 	}
@@ -252,7 +282,7 @@ public final class DialogueRuntime {
 				new DialogueIntent(DialogueIntentType.ACKNOWLEDGE_FAILURE, null, null),
 				tick
 			));
-			appendTurn(new DialogueTurn(DialogueSpeakerLabels.AGENT, PARSE_ERROR_MESSAGE, tick));
+			recordAgentTurn(PARSE_ERROR_MESSAGE, tick);
 		}
 
 		if (consecutiveFailureCount >= DEGRADED_FAILURE_THRESHOLD && !degraded) {
@@ -266,8 +296,14 @@ public final class DialogueRuntime {
 				new DialogueIntent(DialogueIntentType.ACKNOWLEDGE_FAILURE, null, null),
 				tick
 			));
-			appendTurn(new DialogueTurn(DialogueSpeakerLabels.AGENT, DEGRADED_MESSAGE, tick));
+			recordAgentTurn(DEGRADED_MESSAGE, tick);
 		}
+	}
+
+	private void recordAgentTurn(String text, long tick) {
+		DialogueTurn turn = new DialogueTurn(DialogueSpeakerLabels.AGENT, text, tick, clock.millis());
+		appendTurn(turn);
+		plannerOrchestrator.recordAssistantTurn(turn);
 	}
 
 	private void appendTurn(DialogueTurn turn) {
@@ -275,5 +311,14 @@ public final class DialogueRuntime {
 		while (recentTurns.size() > maxRecentTurns) {
 			recentTurns.remove(0);
 		}
+	}
+
+	private static PlannerOrchestrator defaultOrchestrator(ai.moeru.airicraft.agent.AgentConfig.LlmConfig config, Clock clock) {
+		return new PlannerOrchestrator(
+			new PlannerExecutor(new OpenAiCompatibleLlmBackend(config)),
+			new PlannerCompactionService(new OpenAiCompatibleChatClient(config)),
+			new PlannerContextAggregator(clock, config.plannerCompactionTriggerTokens()),
+			CurrentViewVisionTool.disabled()
+		);
 	}
 }
