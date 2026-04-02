@@ -12,6 +12,11 @@
 - Before running build or test verification commands, source `.envrc` first: `source .envrc`
 - Full build: `./gradlew build`
 - Run Minecraft client in dev: `./gradlew runClient`
+- `runClient` starts JDWP by default on `127.0.0.1:5005` with `suspend=n`
+- Attach a debugger with `jdb -attach 127.0.0.1:5005` or any JDWP client
+- Override JDWP settings with Gradle properties, for example:
+  - `./gradlew runClient -Pairicraft.jdwp.port=5006`
+  - `./gradlew runClient -Pairicraft.jdwp.suspend=y`
 - CLI entrypoint: `wrapper/src/main/java/ai/moeru/airicraft/wrapper/AiricraftCliMain.java`
 - CLI artifact is built by the `wrapper` subproject as a runnable jar and application distribution.
 

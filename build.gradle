@@ -6,6 +6,9 @@ plugins {
 version = project.mod_version
 group = project.maven_group
 
+def runClientJdwpPort = providers.gradleProperty("airicraft.jdwp.port").orElse("5005")
+def runClientJdwpSuspend = providers.gradleProperty("airicraft.jdwp.suspend").orElse("n")
+
 base {
 	archivesName = project.archives_base_name
 }
@@ -24,6 +27,12 @@ loom {
 		}
 	}
 
+}
+
+tasks.named("runClient").configure {
+	jvmArgs(
+		"-agentlib:jdwp=transport=dt_socket,server=y,suspend=${runClientJdwpSuspend.get()},address=127.0.0.1:${runClientJdwpPort.get()}"
+	)
 }
 
 dependencies {
