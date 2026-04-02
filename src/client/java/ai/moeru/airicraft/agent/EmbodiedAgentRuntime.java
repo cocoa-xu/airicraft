@@ -48,14 +48,17 @@ import ai.moeru.airicraft.agent.verification.scenarios.DialogueChatSanitizationV
 import ai.moeru.airicraft.agent.verification.scenarios.DialogueClearGoalVerification;
 import ai.moeru.airicraft.agent.verification.scenarios.DialogueProactiveSocialModeVerification;
 import ai.moeru.airicraft.agent.verification.scenarios.FollowVerification;
+import ai.moeru.airicraft.agent.verification.scenarios.FollowSingleplayerLocalPauseVerification;
 import ai.moeru.airicraft.agent.verification.scenarios.FollowReacquireTargetVerification;
 import ai.moeru.airicraft.agent.verification.scenarios.LlmDegradationVerification;
 import ai.moeru.airicraft.agent.verification.scenarios.LlmDegradationGoalPreservedVerification;
+import ai.moeru.airicraft.agent.verification.scenarios.ManualInputIdlePassthroughVerification;
 import ai.moeru.airicraft.agent.verification.scenarios.PlannerObservabilityVerification;
 import ai.moeru.airicraft.agent.verification.scenarios.SessionLanVerification;
 import ai.moeru.airicraft.agent.verification.scenarios.SessionVerification;
 import ai.moeru.airicraft.agent.verification.scenarios.SocialPrimaryInteractionTtlVerification;
 import ai.moeru.airicraft.agent.verification.scenarios.SocialChatIngestVerification;
+import ai.moeru.airicraft.agent.session.SessionMode;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.text.Text;
 import net.minecraft.util.math.Vec3d;
@@ -653,24 +656,52 @@ public final class EmbodiedAgentRuntime {
 			() -> eventBuffer.containsTypeForPlayer("social.player_addressed_agent", "Alice"),
 			() -> primaryInteractionResolver.current().map(PrimaryInteractionPlayer::name).filter("Alice"::equals).isPresent()
 		));
-		verificationRunner.register(new FollowVerification(
-			() -> sessionSnapshot.worldLoaded(),
+		verificationRunner.register(new FollowSingleplayerLocalPauseVerification(
+			() -> sessionSnapshot.mode() == SessionMode.SINGLEPLAYER_LOCAL,
 			() -> injectMockPlannerResponse(new PlannerResponse(
-				"Following Alice.",
-				new PlannerIntent("set_goal", GoalType.FOLLOW_PLAYER, "Alice")
+				"I'll follow once LAN or multiplayer is active.",
+				new PlannerIntent("set_goal", GoalType.FOLLOW_PLAYER, "PausedAlice")
 			)),
-			() -> nearbyPlayerTracker.injectPlayerNearby("Alice", playerOffset(5.0D), tickCount, eventBuffer),
-			() -> onChatReceived("Alice", "@agent follow me"),
+			() -> nearbyPlayerTracker.injectPlayerNearby("PausedAlice", playerOffset(5.0D), tickCount, eventBuffer),
+			() -> onChatReceived("PausedAlice", "@agent follow me"),
 			() -> lastDialogueResponse().isPresent(),
 			() -> lastDialogueResponse()
-				.map(response -> response.intent().type() == DialogueIntentType.SET_GOAL)
+				.map(response -> response.intent().type() == DialogueIntentType.SET_GOAL && "PausedAlice".equals(response.intent().targetPlayer()))
 				.orElse(false),
-			() -> eventBuffer.containsTypeForPlayer("follow.target_acquired", "Alice"),
-			() -> activeGoal().map(goal -> goal.type() == GoalType.FOLLOW_PLAYER).orElse(false),
-			() -> nearbyPlayerTracker.injectPlayerMove("Alice", playerOffset(20.0D), tickCount, eventBuffer),
+			() -> eventBuffer.containsTypeForPlayer("follow.target_acquired", "PausedAlice"),
+			() -> activeGoal().map(goal -> goal.type() == GoalType.FOLLOW_PLAYER && "PausedAlice".equals(goal.targetPlayer())).orElse(false),
+			() -> behaviorTreeSnapshot().activeNodePath().contains("ActuationBlockedBySession"),
+			() -> !behaviorTreeSnapshot().movement().movingForward()
+				&& !behaviorTreeSnapshot().movement().sprinting()
+				&& !behaviorTreeSnapshot().movement().jumping()
+		));
+		verificationRunner.register(new ManualInputIdlePassthroughVerification(
+			() -> sessionSnapshot.mode() == SessionMode.SINGLEPLAYER_LOCAL,
+			() -> activeGoal().isEmpty(),
+			() -> setForwardKeyPressed(true),
+			this::isForwardKeyPressed,
+			() -> setForwardKeyPressed(false)
+		));
+		verificationRunner.register(new FollowVerification(
+			() -> sessionSnapshot.mode() == SessionMode.SINGLEPLAYER_LOCAL,
+			() -> injectMockPlannerResponse(new PlannerResponse(
+				"I'll follow once LAN is open.",
+				new PlannerIntent("set_goal", GoalType.FOLLOW_PLAYER, "LanAlice")
+			)),
+			() -> nearbyPlayerTracker.injectPlayerNearby("LanAlice", playerOffset(5.0D), tickCount, eventBuffer),
+			() -> onChatReceived("LanAlice", "@agent follow me"),
+			() -> lastDialogueResponse().isPresent(),
+			() -> lastDialogueResponse()
+				.map(response -> response.intent().type() == DialogueIntentType.SET_GOAL && "LanAlice".equals(response.intent().targetPlayer()))
+				.orElse(false),
+			() -> eventBuffer.containsTypeForPlayer("follow.target_acquired", "LanAlice"),
+			() -> activeGoal().map(goal -> goal.type() == GoalType.FOLLOW_PLAYER && "LanAlice".equals(goal.targetPlayer())).orElse(false),
+			this::openLan,
+			() -> sessionSnapshot.mode() == SessionMode.SINGLEPLAYER_LAN_HOST,
+			() -> nearbyPlayerTracker.injectPlayerMove("LanAlice", playerOffset(20.0D), tickCount, eventBuffer),
 			() -> behaviorTreeSnapshot().activeNodePath().stream().anyMatch(node -> node.contains("MoveCloser")),
-			() -> nearbyPlayerTracker.injectPlayerDisconnect("Alice", tickCount, eventBuffer),
-			() -> eventBuffer.containsTypeForPlayer("follow.target_lost", "Alice")
+			() -> nearbyPlayerTracker.injectPlayerDisconnect("LanAlice", tickCount, eventBuffer),
+			() -> eventBuffer.containsTypeForPlayer("follow.target_lost", "LanAlice")
 		));
 		verificationRunner.register(new DialogueVerification(
 			() -> sessionSnapshot.worldLoaded(),
@@ -861,5 +892,20 @@ public final class EmbodiedAgentRuntime {
 			client.player.getY(),
 			client.player.getZ()
 		);
+	}
+
+	private void setForwardKeyPressed(boolean pressed) {
+		MinecraftClient client = MinecraftClient.getInstance();
+		if (client == null || client.options == null) {
+			throw new IllegalStateException("Minecraft client input is not initialized");
+		}
+		client.options.forwardKey.setPressed(pressed);
+	}
+
+	private boolean isForwardKeyPressed() {
+		MinecraftClient client = MinecraftClient.getInstance();
+		return client != null
+			&& client.options != null
+			&& client.options.forwardKey.isPressed();
 	}
 }

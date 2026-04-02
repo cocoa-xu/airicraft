@@ -1,7 +1,5 @@
 package ai.moeru.airicraft.agent.verification.scenarios;
 
-import ai.moeru.airicraft.agent.dialogue.DialogueIntentType;
-import ai.moeru.airicraft.agent.goals.GoalType;
 import ai.moeru.airicraft.agent.verification.ScenarioBuilder;
 import ai.moeru.airicraft.agent.verification.VerificationScenario;
 
@@ -9,7 +7,7 @@ import java.util.Objects;
 import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 
-public final class FollowVerification extends VerificationScenario {
+public final class FollowSingleplayerLocalPauseVerification extends VerificationScenario {
 	private final BooleanSupplier singleplayerLocal;
 	private final Runnable setupMockPlannerResponse;
 	private final Runnable injectNearbyPlayer;
@@ -18,14 +16,10 @@ public final class FollowVerification extends VerificationScenario {
 	private final Supplier<Boolean> setGoalIntentSeen;
 	private final BooleanSupplier targetAcquiredSeen;
 	private final Supplier<Boolean> followGoalActive;
-	private final Runnable openLanAction;
-	private final BooleanSupplier lanHostActive;
-	private final Runnable injectFarMove;
-	private final Supplier<Boolean> moveCloserActive;
-	private final Runnable injectDisconnect;
-	private final BooleanSupplier targetLostSeen;
+	private final BooleanSupplier actuationBlockedSeen;
+	private final BooleanSupplier movementIdle;
 
-	public FollowVerification(
+	public FollowSingleplayerLocalPauseVerification(
 		BooleanSupplier singleplayerLocal,
 		Runnable setupMockPlannerResponse,
 		Runnable injectNearbyPlayer,
@@ -34,12 +28,8 @@ public final class FollowVerification extends VerificationScenario {
 		Supplier<Boolean> setGoalIntentSeen,
 		BooleanSupplier targetAcquiredSeen,
 		Supplier<Boolean> followGoalActive,
-		Runnable openLanAction,
-		BooleanSupplier lanHostActive,
-		Runnable injectFarMove,
-		Supplier<Boolean> moveCloserActive,
-		Runnable injectDisconnect,
-		BooleanSupplier targetLostSeen
+		BooleanSupplier actuationBlockedSeen,
+		BooleanSupplier movementIdle
 	) {
 		this.singleplayerLocal = Objects.requireNonNull(singleplayerLocal, "singleplayerLocal");
 		this.setupMockPlannerResponse = Objects.requireNonNull(setupMockPlannerResponse, "setupMockPlannerResponse");
@@ -49,17 +39,13 @@ public final class FollowVerification extends VerificationScenario {
 		this.setGoalIntentSeen = Objects.requireNonNull(setGoalIntentSeen, "setGoalIntentSeen");
 		this.targetAcquiredSeen = Objects.requireNonNull(targetAcquiredSeen, "targetAcquiredSeen");
 		this.followGoalActive = Objects.requireNonNull(followGoalActive, "followGoalActive");
-		this.openLanAction = Objects.requireNonNull(openLanAction, "openLanAction");
-		this.lanHostActive = Objects.requireNonNull(lanHostActive, "lanHostActive");
-		this.injectFarMove = Objects.requireNonNull(injectFarMove, "injectFarMove");
-		this.moveCloserActive = Objects.requireNonNull(moveCloserActive, "moveCloserActive");
-		this.injectDisconnect = Objects.requireNonNull(injectDisconnect, "injectDisconnect");
-		this.targetLostSeen = Objects.requireNonNull(targetLostSeen, "targetLostSeen");
+		this.actuationBlockedSeen = Objects.requireNonNull(actuationBlockedSeen, "actuationBlockedSeen");
+		this.movementIdle = Objects.requireNonNull(movementIdle, "movementIdle");
 	}
 
 	@Override
 	public String name() {
-		return "follow.basic";
+		return "follow.singleplayer_local_pause";
 	}
 
 	@Override
@@ -73,11 +59,7 @@ public final class FollowVerification extends VerificationScenario {
 			.assertThat("set goal intent seen", setGoalIntentSeen::get)
 			.waitUntil("follow target acquired", 200, targetAcquiredSeen)
 			.assertThat("follow goal active", followGoalActive::get)
-			.action("open lan", openLanAction)
-			.waitUntil("lan host active", 100, lanHostActive)
-			.action("move target farther away", injectFarMove)
-			.waitUntil("move closer active", 100, moveCloserActive::get)
-			.action("disconnect target", injectDisconnect)
-			.waitUntil("follow target lost", 100, targetLostSeen);
+			.waitUntil("actuation blocked by session", 100, actuationBlockedSeen)
+			.assertThat("movement stays idle", movementIdle);
 	}
 }

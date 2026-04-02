@@ -17,7 +17,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class FollowCapabilityTest {
 	@Test
-	void emitsAcquireAndLostEventsAcrossTargetLifecycle() {
+	void preservesTargetTrackingInSingleplayerLocalWhileActuationIsBlocked() {
 		FollowCapability capability = new FollowCapability();
 		NearbyPlayerTracker tracker = new NearbyPlayerTracker();
 		SemanticEventBuffer eventBuffer = new SemanticEventBuffer(16);
@@ -31,6 +31,8 @@ class FollowCapabilityTest {
 			10L
 		);
 		GoalSnapshot goal = new GoalSnapshot(GoalType.FOLLOW_PLAYER, "Alice", 10L, "test");
+
+		assertFalse(session.companionActuationAllowed());
 
 		tracker.injectPlayerNearby("Alice", new Vec3d(5.0D, 64.0D, 0.0D), 10L, eventBuffer);
 		FollowState acquired = capability.tick(null, session, Optional.of(goal), tracker, 11L, eventBuffer);

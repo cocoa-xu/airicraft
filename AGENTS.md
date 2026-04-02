@@ -9,6 +9,7 @@
   - `wrapper/`: standalone Java CLI for agent-driven control
 
 ## Build And Run
+- Before running build or test verification commands, source `.envrc` first: `source .envrc`
 - Full build: `./gradlew build`
 - Run Minecraft client in dev: `./gradlew runClient`
 - CLI entrypoint: `wrapper/src/main/java/ai/moeru/airicraft/wrapper/AiricraftCliMain.java`

@@ -51,6 +51,16 @@ public final class BehaviorTreeRuntime {
 		}
 
 		if (activeGoal.isPresent() && activeGoal.get().type() == GoalType.FOLLOW_PLAYER) {
+			if (!sessionSnapshot.companionActuationAllowed()) {
+				movementController.stop(client);
+				snapshot = new BehaviorTreeSnapshot(
+					NodeStatus.RUNNING,
+					List.of("Root", "FollowPlayerSubtree", "ActuationBlockedBySession"),
+					movementController.snapshot()
+				);
+				return;
+			}
+
 			if (followState.targetNearby()) {
 				Vec3d targetPos = new Vec3d(followState.targetX(), followState.targetY() + 1.62D, followState.targetZ());
 				lookController.lookAt(client, targetPos, LOOK_YAW_STEP, LOOK_PITCH_STEP);

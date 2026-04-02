@@ -13,6 +13,10 @@ public record SessionSnapshot(
 		return new SessionSnapshot(SessionMode.OUT_OF_WORLD, false, false, null, false, 0, 0L);
 	}
 
+	public boolean companionActuationAllowed() {
+		return mode == SessionMode.SINGLEPLAYER_LAN_HOST || mode == SessionMode.REMOTE_MULTIPLAYER;
+	}
+
 	public SessionSnapshot withMode(SessionMode value) {
 		return new SessionSnapshot(value, clientBooted, worldLoaded, dimensionId, lanPublished, lanPort, tickCount);
 	}

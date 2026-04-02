@@ -51,6 +51,10 @@ public final class MovementController {
 	}
 
 	public void stop(MinecraftClient client) {
+		if (!isControllingMovement()) {
+			return;
+		}
+
 		movingForward = false;
 		sprinting = false;
 		jumping = false;
@@ -107,6 +111,15 @@ public final class MovementController {
 		}
 
 		return player.horizontalCollision && player.isOnGround();
+	}
+
+	private boolean isControllingMovement() {
+		return movingForward
+			|| sprinting
+			|| jumping
+			|| movingSinceTick >= 0L
+			|| movementStartPos != null
+			|| previousAutoJumpValue != null;
 	}
 
 	private void enableAutoJump(MinecraftClient client) {
