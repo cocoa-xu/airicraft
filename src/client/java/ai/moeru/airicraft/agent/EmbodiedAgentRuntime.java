@@ -112,8 +112,10 @@ public final class EmbodiedAgentRuntime {
 			new PlannerOrchestrator(
 				new PlannerExecutor(new OpenAiCompatibleLlmBackend(config.llm())),
 				new PlannerCompactionService(new OpenAiCompatibleChatClient(config.llm())),
-				new PlannerContextAggregator(clock, config.llm().plannerCompactionTriggerTokens()),
-				visionService
+				new PlannerContextAggregator(clock, config.llm().plannerCompactionTriggerTokens(), config.llm().plannerVisionMode()),
+				visionService,
+				config.llm().plannerVisionMode(),
+				config.llm().visionImageDetail()
 			),
 			config.llm().maxRecentConversationTurns(),
 			clock

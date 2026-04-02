@@ -1,6 +1,7 @@
 package ai.moeru.airicraft.agent.llm;
 
 import ai.moeru.airicraft.BridgeUnavailableException;
+import ai.moeru.airicraft.FirstPersonScreenshotService;
 import ai.moeru.airicraft.agent.AgentConfig;
 import ai.moeru.airicraft.agent.dialogue.DialogueTurn;
 import ai.moeru.airicraft.agent.goals.GoalType;
@@ -33,7 +34,7 @@ class PlannerOrchestratorTest {
 			"Sure, I'll follow you.",
 			new PlannerIntent("set_goal", GoalType.FOLLOW_PLAYER, "Alice")
 		));
-		PlannerOrchestrator orchestrator = newOrchestrator(backend, CurrentViewVisionTool.disabled());
+		PlannerOrchestrator orchestrator = newOrchestrator(backend, CurrentViewVisionTool.disabled(), PlannerVisionMode.EXTERNAL_SUMMARY);
 
 		orchestrator.submit(baseRequest(null));
 		PlannerExecutionResult result = awaitResult(orchestrator);
@@ -49,20 +50,22 @@ class PlannerOrchestratorTest {
 		backend.injectMockResponse(new PlannerResponse(
 			"",
 			new PlannerIntent("none", null, null),
-			new PlannerToolRequest("describe_current_view", "Describe the scene.")
+			new PlannerToolRequest("take_a_look", "Describe the scene.")
 		));
 		backend.injectMockResponse(new PlannerResponse(
 			"I see a forested hill ahead.",
 			new PlannerIntent("reply_only", null, null)
 		));
-		PlannerOrchestrator orchestrator = newOrchestrator(
-			backend,
-			new StubVisionTool(CompletableFuture.completedFuture(new VisionDescription(
+		StubVisionTool visionTool = new StubVisionTool(
+			true,
+			CompletableFuture.completedFuture(capturedScreenshot()),
+			CompletableFuture.completedFuture(new VisionDescription(
 				"A birch forest hill under open sky.",
 				"gpt-4.1-mini",
 				1L
-			)))
+			))
 		);
+		PlannerOrchestrator orchestrator = newOrchestrator(backend, visionTool, PlannerVisionMode.EXTERNAL_SUMMARY);
 
 		orchestrator.submit(baseRequest(null));
 		PlannerExecutionResult result = awaitResult(orchestrator);
@@ -71,6 +74,8 @@ class PlannerOrchestratorTest {
 		assertTrue(result.succeeded());
 		assertEquals("I see a forested hill ahead.", result.response().replyText());
 		assertEquals("A birch forest hill under open sky.", result.request().toolResult());
+		assertEquals(1, visionTool.captureRequestCount());
+		assertEquals(1, visionTool.descriptionRequestCount());
 	}
 
 	@Test
@@ -79,7 +84,7 @@ class PlannerOrchestratorTest {
 		backend.injectMockResponse(new PlannerResponse(
 			"I dont see anything yet, where are you?",
 			new PlannerIntent("none", null, null),
-			new PlannerToolRequest("describe_current_view", "Describe the scene.")
+			new PlannerToolRequest("take_a_look", "Describe the scene.")
 		));
 		backend.injectMockResponse(new PlannerResponse(
 			"I can see a beach and ocean nearby.",
@@ -87,11 +92,16 @@ class PlannerOrchestratorTest {
 		));
 		PlannerOrchestrator orchestrator = newOrchestrator(
 			backend,
-			new StubVisionTool(CompletableFuture.completedFuture(new VisionDescription(
-				"A sandy beach next to the ocean under open sky.",
-				"gpt-4.1-mini",
-				1L
-			)))
+			new StubVisionTool(
+				true,
+				CompletableFuture.completedFuture(capturedScreenshot()),
+				CompletableFuture.completedFuture(new VisionDescription(
+					"A sandy beach next to the ocean under open sky.",
+					"gpt-4.1-mini",
+					1L
+				))
+			),
+			PlannerVisionMode.EXTERNAL_SUMMARY
 		);
 
 		orchestrator.submit(baseRequest(null));
@@ -109,7 +119,7 @@ class PlannerOrchestratorTest {
 		backend.injectMockResponse(new PlannerResponse(
 			"",
 			new PlannerIntent("none", null, null),
-			new PlannerToolRequest("describe_current_view", "Describe the scene.")
+			new PlannerToolRequest("take_a_look", "Describe the scene.")
 		));
 		backend.injectMockResponse(new PlannerResponse(
 			"I can't see clearly right now.",
@@ -117,9 +127,12 @@ class PlannerOrchestratorTest {
 		));
 		PlannerOrchestrator orchestrator = newOrchestrator(
 			backend,
-			new StubVisionTool(CompletableFuture.failedFuture(
-				new BridgeUnavailableException("capture_timeout", "Screenshot capture timed out")
-			))
+			new StubVisionTool(
+				true,
+				CompletableFuture.failedFuture(new BridgeUnavailableException("capture_timeout", "Screenshot capture timed out")),
+				CompletableFuture.completedFuture(new VisionDescription("unused", "gpt-4.1-mini", 1L))
+			),
+			PlannerVisionMode.EXTERNAL_SUMMARY
 		);
 
 		orchestrator.submit(baseRequest(null));
@@ -131,25 +144,60 @@ class PlannerOrchestratorTest {
 	}
 
 	@Test
+	void nativeVisionModeFeedsScreenshotBackIntoPlannerWithoutExternalSummary() {
+		OpenAiCompatibleLlmBackend backend = new OpenAiCompatibleLlmBackend(AgentConfig.LlmConfig.defaults());
+		backend.injectMockResponse(new PlannerResponse(
+			"",
+			new PlannerIntent("none", null, null),
+			new PlannerToolRequest("take_a_look", null)
+		));
+		backend.injectMockResponse(new PlannerResponse(
+			"I can see the hill clearly now.",
+			new PlannerIntent("reply_only", null, null)
+		));
+		StubVisionTool visionTool = new StubVisionTool(
+			false,
+			CompletableFuture.completedFuture(capturedScreenshot()),
+			CompletableFuture.failedFuture(new AssertionError("External summary should not be requested"))
+		);
+		PlannerOrchestrator orchestrator = newOrchestrator(backend, visionTool, PlannerVisionMode.NATIVE_TOOL_IMAGE);
+
+		orchestrator.submit(baseRequest(null));
+		PlannerExecutionResult result = awaitResult(orchestrator);
+
+		assertNotNull(result);
+		assertTrue(result.succeeded());
+		assertEquals("I can see the hill clearly now.", result.response().replyText());
+		assertEquals("Tool result for take_a_look: current first-person view attached.", result.request().toolResult());
+		assertEquals(1, visionTool.captureRequestCount());
+		assertEquals(0, visionTool.descriptionRequestCount());
+	}
+
+	@Test
 	void secondToolRequestReturnsParseFailure() {
 		OpenAiCompatibleLlmBackend backend = new OpenAiCompatibleLlmBackend(AgentConfig.LlmConfig.defaults());
 		backend.injectMockResponse(new PlannerResponse(
 			"",
 			new PlannerIntent("none", null, null),
-			new PlannerToolRequest("describe_current_view", "Describe the scene.")
+			new PlannerToolRequest("take_a_look", "Describe the scene.")
 		));
 		backend.injectMockResponse(new PlannerResponse(
 			"",
 			new PlannerIntent("none", null, null),
-			new PlannerToolRequest("describe_current_view", "Describe the scene again.")
+			new PlannerToolRequest("take_a_look", "Describe the scene again.")
 		));
 		PlannerOrchestrator orchestrator = newOrchestrator(
 			backend,
-			new StubVisionTool(CompletableFuture.completedFuture(new VisionDescription(
-				"A birch forest hill under open sky.",
-				"gpt-4.1-mini",
-				1L
-			)))
+			new StubVisionTool(
+				true,
+				CompletableFuture.completedFuture(capturedScreenshot()),
+				CompletableFuture.completedFuture(new VisionDescription(
+					"A birch forest hill under open sky.",
+					"gpt-4.1-mini",
+					1L
+				))
+			),
+			PlannerVisionMode.EXTERNAL_SUMMARY
 		);
 
 		orchestrator.submit(baseRequest(null));
@@ -175,13 +223,16 @@ class PlannerOrchestratorTest {
 				10_000,
 				8,
 				65_536,
-				"low"
+				"low",
+				false
 			);
 			PlannerOrchestrator orchestrator = new PlannerOrchestrator(
 				new PlannerExecutor(new OpenAiCompatibleLlmBackend(config)),
 				new PlannerCompactionService(new OpenAiCompatibleChatClient(config)),
-				new PlannerContextAggregator(Clock.systemDefaultZone(), config.plannerCompactionTriggerTokens()),
-				CurrentViewVisionTool.disabled()
+				new PlannerContextAggregator(Clock.systemDefaultZone(), config.plannerCompactionTriggerTokens(), config.plannerVisionMode()),
+				CurrentViewVisionTool.disabled(),
+				config.plannerVisionMode(),
+				config.visionImageDetail()
 			);
 			orchestrator.recordAssistantTurn(new DialogueTurn("agent", "On it.", 10L, 1_000L));
 
@@ -208,13 +259,15 @@ class PlannerOrchestratorTest {
 		);
 	}
 
-	private static PlannerOrchestrator newOrchestrator(OpenAiCompatibleLlmBackend backend, CurrentViewVisionTool visionTool) {
+	private static PlannerOrchestrator newOrchestrator(OpenAiCompatibleLlmBackend backend, CurrentViewVisionTool visionTool, PlannerVisionMode visionMode) {
 		AgentConfig.LlmConfig config = AgentConfig.LlmConfig.defaults();
 		return new PlannerOrchestrator(
 			new PlannerExecutor(backend),
 			new PlannerCompactionService(new OpenAiCompatibleChatClient(config)),
-			new PlannerContextAggregator(Clock.systemDefaultZone(), config.plannerCompactionTriggerTokens()),
-			visionTool
+			new PlannerContextAggregator(Clock.systemDefaultZone(), config.plannerCompactionTriggerTokens(), visionMode),
+			visionTool,
+			visionMode,
+			config.visionImageDetail()
 		);
 	}
 
@@ -255,15 +308,50 @@ class PlannerOrchestratorTest {
 		throw new AssertionError("Timed out waiting for debug compaction");
 	}
 
-	private record StubVisionTool(CompletableFuture<VisionDescription> future) implements CurrentViewVisionTool {
-		@Override
-		public boolean isConfigured() {
-			return true;
+	private static FirstPersonScreenshotService.CapturedScreenshot capturedScreenshot() {
+		return new FirstPersonScreenshotService.CapturedScreenshot("png", 854, 480, 1920, 1080, 1L, new byte[]{1, 2, 3});
+	}
+
+	private static final class StubVisionTool implements CurrentViewVisionTool {
+		private final boolean configured;
+		private final CompletableFuture<FirstPersonScreenshotService.CapturedScreenshot> captureFuture;
+		private final CompletableFuture<VisionDescription> descriptionFuture;
+		private int captureRequestCount;
+		private int descriptionRequestCount;
+
+		private StubVisionTool(
+			boolean configured,
+			CompletableFuture<FirstPersonScreenshotService.CapturedScreenshot> captureFuture,
+			CompletableFuture<VisionDescription> descriptionFuture
+		) {
+			this.configured = configured;
+			this.captureFuture = captureFuture;
+			this.descriptionFuture = descriptionFuture;
 		}
 
 		@Override
-		public CompletableFuture<VisionDescription> requestDescription(String prompt) {
-			return future;
+		public boolean isConfigured() {
+			return configured;
+		}
+
+		@Override
+		public CompletableFuture<FirstPersonScreenshotService.CapturedScreenshot> requestCapture() {
+			captureRequestCount++;
+			return captureFuture;
+		}
+
+		@Override
+		public CompletableFuture<VisionDescription> requestDescription(FirstPersonScreenshotService.CapturedScreenshot screenshot, String prompt) {
+			descriptionRequestCount++;
+			return descriptionFuture;
+		}
+
+		private int captureRequestCount() {
+			return captureRequestCount;
+		}
+
+		private int descriptionRequestCount() {
+			return descriptionRequestCount;
 		}
 	}
 

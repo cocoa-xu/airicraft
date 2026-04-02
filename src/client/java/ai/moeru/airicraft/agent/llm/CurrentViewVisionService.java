@@ -42,13 +42,7 @@ public final class CurrentViewVisionService implements CurrentViewVisionTool {
 	}
 
 	@Override
-	public CompletableFuture<VisionDescription> requestDescription(String prompt) {
-		if (!isConfigured()) {
-			return CompletableFuture.failedFuture(
-				new LlmBackendException(LlmFailureType.PROVIDER_UNAVAILABLE, "Vision provider is not configured")
-			);
-		}
-
+	public CompletableFuture<FirstPersonScreenshotService.CapturedScreenshot> requestCapture() {
 		MinecraftClient client = clientSupplier.get();
 		if (client == null || client.world == null || client.player == null) {
 			return CompletableFuture.failedFuture(
@@ -57,21 +51,39 @@ public final class CurrentViewVisionService implements CurrentViewVisionTool {
 		}
 
 		try {
-			CompletableFuture<FirstPersonScreenshotService.CapturedScreenshot> captureFuture = screenshotService.requestCapture(client);
-			return captureFuture.thenCompose(capture ->
-				CompletableFuture.supplyAsync(() -> {
-					try {
-						return describe(capture, prompt);
-					}
-					catch (LlmBackendException exception) {
-						throw new CompletionException(exception);
-					}
-				}, executorService)
-			);
+			return screenshotService.requestCapture(client);
 		}
 		catch (RuntimeException exception) {
 			return CompletableFuture.failedFuture(exception);
 		}
+	}
+
+	@Override
+	public CompletableFuture<VisionDescription> requestDescription(FirstPersonScreenshotService.CapturedScreenshot screenshot, String prompt) {
+		if (!isConfigured()) {
+			return CompletableFuture.failedFuture(
+				new LlmBackendException(LlmFailureType.PROVIDER_UNAVAILABLE, "Vision provider is not configured")
+			);
+		}
+
+		try {
+			return CompletableFuture.supplyAsync(() -> {
+				try {
+					return describe(screenshot, prompt);
+				}
+				catch (LlmBackendException exception) {
+					throw new CompletionException(exception);
+				}
+			}, executorService);
+		}
+		catch (RuntimeException exception) {
+			return CompletableFuture.failedFuture(exception);
+		}
+	}
+
+	@Override
+	public CompletableFuture<VisionDescription> requestDescription(String prompt) {
+		return CurrentViewVisionTool.super.requestDescription(prompt);
 	}
 
 	public VisionDescription describe(FirstPersonScreenshotService.CapturedScreenshot screenshot, String prompt) throws LlmBackendException {

@@ -13,14 +13,16 @@ public final class PlannerContextAggregator {
 	private final Clock clock;
 	private final ZoneId zoneId;
 	private final int compactionTriggerTokens;
+	private final PlannerVisionMode visionMode;
 
 	private PlannerContextState state = PlannerContextState.initial();
 	private LlmConversation frozenPlannerConversation;
 
-	public PlannerContextAggregator(Clock clock, int compactionTriggerTokens) {
+	public PlannerContextAggregator(Clock clock, int compactionTriggerTokens, PlannerVisionMode visionMode) {
 		this.clock = Objects.requireNonNull(clock, "clock");
 		this.zoneId = clock.getZone();
 		this.compactionTriggerTokens = compactionTriggerTokens;
+		this.visionMode = Objects.requireNonNull(visionMode, "visionMode");
 	}
 
 	public boolean compactionPending() {
@@ -128,6 +130,19 @@ public final class PlannerContextAggregator {
 		);
 	}
 
+	public LlmConversation buildPlannerFollowUpConversation(String toolResult, LlmImageAttachment imageAttachment) {
+		if (frozenPlannerConversation == null) {
+			throw new IllegalStateException("No frozen planner conversation");
+		}
+		return frozenPlannerConversation.withAppended(
+			LlmChatMessage.userWithImage(
+				toolResult == null || toolResult.isBlank() ? "Tool result: image attached." : toolResult,
+				LlmMessageKind.TOOL_RESULT,
+				imageAttachment
+			)
+		);
+	}
+
 	public LlmConversation buildCompactionConversation() {
 		long nowMs = clock.millis();
 		state = PlannerContextReducer.commitPending(state, nowMs);
@@ -172,7 +187,7 @@ public final class PlannerContextAggregator {
 
 	private LlmConversation composeConversation(List<LlmChatMessage> canonicalTape, LlmChatMessage terminalMessage) {
 		ArrayList<LlmChatMessage> messages = new ArrayList<>();
-		messages.add(LlmChatMessage.system(PlannerPromptPolicy.SYSTEM_PROMPT));
+		messages.add(LlmChatMessage.system(PlannerPromptPolicy.systemPrompt(visionMode)));
 		if (state.activeCheckpoint() != null) {
 			messages.add(LlmChatMessage.user(state.activeCheckpoint().renderMessage(), LlmMessageKind.CHECKPOINT));
 		}

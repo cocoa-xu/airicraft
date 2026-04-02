@@ -48,9 +48,11 @@ class AiricraftCliMainTest {
 			"available", true,
 			"planner", linkedMap(
 				"configured", true,
+				"plannerVisionMode", "native_tool_image",
 				"inFlight", false,
 				"plannerInFlight", false,
 				"compactionInFlight", false,
+				"captureInFlight", false,
 				"toolInFlight", false,
 				"toolUsed", false,
 				"context", linkedMap(
@@ -70,8 +72,29 @@ class AiricraftCliMainTest {
 
 		assertEquals(0, result.exitCode());
 		assertTrue(result.output().contains("command: agent context\n"));
+		assertTrue(result.output().contains("plannerVisionMode: native_tool_image\n"));
 		assertTrue(result.output().contains("compactionPending: true\n"));
 		assertTrue(result.output().contains("canonicalMessageCount: 8\n"));
+	}
+
+	@Test
+	void agentStatusIncludesPlannerVisionMode() {
+		TestTransport transport = new TestTransport();
+		transport.agentStatusPayload = linkedMap(
+			"available", true,
+			"initialized", true,
+			"tickCount", 42,
+			"llmAvailable", true,
+			"visionAvailable", false,
+			"plannerVisionMode", "native_tool_image",
+			"degraded", false
+		);
+
+		CliResult result = execute(transport, "agent", "status");
+
+		assertEquals(0, result.exitCode());
+		assertTrue(result.output().contains("command: agent status\n"));
+		assertTrue(result.output().contains("plannerVisionMode: native_tool_image\n"));
 	}
 
 	@Test
@@ -84,9 +107,11 @@ class AiricraftCliMainTest {
 			"timeoutMs", 7000,
 			"planner", linkedMap(
 				"configured", true,
+				"plannerVisionMode", "external_summary",
 				"inFlight", true,
 				"plannerInFlight", false,
 				"compactionInFlight", true,
+				"captureInFlight", false,
 				"toolInFlight", false,
 				"context", linkedMap(
 					"compactionPending", false,

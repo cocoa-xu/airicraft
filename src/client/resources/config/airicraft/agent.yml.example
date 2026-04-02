@@ -31,3 +31,7 @@ plannerCompactionTriggerTokens: 65536
 
 # Image detail hint passed to compatible multimodal providers: low | high | auto
 visionImageDetail: "low"
+
+# When true, planner visual tool follow-up attaches the captured image directly to the planner.
+# When false, the visual tool uses the external vision model to summarize the screenshot first.
+plannerNativeVisionEnabled: false

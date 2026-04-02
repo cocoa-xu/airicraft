@@ -31,7 +31,8 @@ class OpenAiCompatibleVisionBackendTest {
 				10_000,
 				8,
 				65_536,
-				"low"
+				"low",
+				false
 			));
 
 			VisionDescription description = backend.describe(new VisionRequest(

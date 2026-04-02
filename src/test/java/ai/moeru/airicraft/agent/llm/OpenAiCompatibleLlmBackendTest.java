@@ -32,7 +32,8 @@ class OpenAiCompatibleLlmBackendTest {
 				10_000,
 				8,
 				65_536,
-				"low"
+				"low",
+				false
 			));
 
 			LlmCallResult<PlannerResponse> result = backend.generate(LlmConversation.of(List.of(
@@ -49,6 +50,42 @@ class OpenAiCompatibleLlmBackendTest {
 			String body = bodyRef.get();
 			assertTrue(body.contains("\"role\":\"system\""));
 			assertTrue(body.contains("Alice said just now"));
+		}
+	}
+
+	@Test
+	void generateBuildsMultimodalPlannerRequestWhenImageAttached() throws Exception {
+		AtomicReference<String> bodyRef = new AtomicReference<>();
+		try (TestServer server = TestServer.start(bodyRef)) {
+			OpenAiCompatibleLlmBackend backend = new OpenAiCompatibleLlmBackend(new AgentConfig.LlmConfig(
+				"http://127.0.0.1:" + server.port(),
+				"planner-key",
+				"planner-model",
+				"https://api.openai.com/v1",
+				"",
+				"",
+				15_000,
+				10_000,
+				8,
+				65_536,
+				"high",
+				true
+			));
+
+			backend.generate(LlmConversation.of(List.of(
+				LlmChatMessage.system("system"),
+				LlmChatMessage.userWithImage(
+					"Tool result for take_a_look: current first-person view attached.",
+					LlmMessageKind.TOOL_RESULT,
+					new LlmImageAttachment("image/png", new byte[]{1, 2, 3}, "high")
+				)
+			)));
+
+			String body = bodyRef.get();
+			assertTrue(body.contains("\"type\":\"image_url\""));
+			assertTrue(body.contains("\"detail\":\"high\""));
+			assertTrue(body.contains("data:image/png;base64,AQID"));
+			assertTrue(body.contains("Tool result for take_a_look"));
 		}
 	}
 

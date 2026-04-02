@@ -19,7 +19,8 @@ class AgentConfigLoaderTest {
 			"visionProviderBaseUrl", "https://vision.example.test/v1",
 			"visionApiKey", "vision-key",
 			"visionRequestTimeoutMillis", 7777,
-			"visionImageDetail", "high"
+			"visionImageDetail", "high",
+			"plannerNativeVisionEnabled", true
 		), defaults);
 
 		assertEquals("https://example.test/v1", parsed.llm().providerBaseUrl());
@@ -31,6 +32,7 @@ class AgentConfigLoaderTest {
 		assertEquals(7777, parsed.llm().visionRequestTimeoutMillis());
 		assertEquals(65_536, parsed.llm().plannerCompactionTriggerTokens());
 		assertEquals("high", parsed.llm().visionImageDetail());
+		assertEquals(true, parsed.llm().plannerNativeVisionEnabled());
 		assertFalse(parsed.llm().visionConfigured());
 	}
 }

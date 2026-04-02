@@ -2,34 +2,46 @@ package ai.moeru.airicraft.agent.llm;
 
 import ai.moeru.airicraft.Airicraft;
 import ai.moeru.airicraft.BridgeUnavailableException;
+import ai.moeru.airicraft.FirstPersonScreenshotService;
 import ai.moeru.airicraft.agent.dialogue.DialogueTurn;
 import ai.moeru.airicraft.agent.events.SemanticEvent;
 
+import java.util.Locale;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 
 public final class PlannerOrchestrator {
+	private static final String VISUAL_TOOL_NAME = "take_a_look";
+	private static final String NATIVE_TOOL_RESULT_TEXT = "Tool result for take_a_look: current first-person view attached.";
+
 	private final PlannerExecutor plannerExecutor;
 	private final PlannerCompactionService compactionService;
 	private final PlannerContextAggregator contextAggregator;
 	private final CurrentViewVisionTool visionTool;
+	private final PlannerVisionMode visionMode;
+	private final String imageDetail;
 
 	private PlannerRequest baseRequest;
 	private boolean toolUsed;
-	private CompletableFuture<String> toolResultFuture;
+	private volatile boolean captureInFlight;
+	private CompletableFuture<ToolExecutionOutcome> toolResultFuture;
 	private CompactionExecutionResult lastCompactionResult;
 
 	public PlannerOrchestrator(
 		PlannerExecutor plannerExecutor,
 		PlannerCompactionService compactionService,
 		PlannerContextAggregator contextAggregator,
-		CurrentViewVisionTool visionTool
+		CurrentViewVisionTool visionTool,
+		PlannerVisionMode visionMode,
+		String imageDetail
 	) {
 		this.plannerExecutor = Objects.requireNonNull(plannerExecutor, "plannerExecutor");
 		this.compactionService = Objects.requireNonNull(compactionService, "compactionService");
 		this.contextAggregator = Objects.requireNonNull(contextAggregator, "contextAggregator");
 		this.visionTool = Objects.requireNonNull(visionTool, "visionTool");
+		this.visionMode = Objects.requireNonNull(visionMode, "visionMode");
+		this.imageDetail = Objects.requireNonNull(imageDetail, "imageDetail");
 	}
 
 	public boolean isConfigured() {
@@ -43,9 +55,11 @@ public final class PlannerOrchestrator {
 	public PlannerOrchestratorDebugSnapshot debugSnapshot() {
 		return new PlannerOrchestratorDebugSnapshot(
 			isConfigured(),
+			visionMode.wireValue(),
 			hasInFlight(),
 			plannerExecutor.hasInFlight(),
 			compactionService.hasInFlight(),
+			captureInFlight,
 			toolResultFuture != null,
 			toolUsed,
 			baseRequest,
@@ -123,7 +137,7 @@ public final class PlannerOrchestrator {
 				summarizeForLog(toolRequest.prompt())
 			);
 			clearState();
-			return parseFailure("Planner requested describe_current_view more than once");
+			return parseFailure("Planner requested take_a_look more than once");
 		}
 		if (!hasToolCompatibleIntent(plannerResult.response())) {
 			Airicraft.LOGGER.warn(
@@ -136,7 +150,7 @@ public final class PlannerOrchestrator {
 			clearState();
 			return parseFailure("Tool requests must set intent.type to none");
 		}
-		if (!"describe_current_view".equals(toolRequest.type()) || toolRequest.prompt() == null || toolRequest.prompt().isBlank()) {
+		if (!isValidToolRequest(toolRequest)) {
 			Airicraft.LOGGER.warn(
 				"Planner returned invalid tool request type={} prompt={}",
 				toolRequest.type(),
@@ -154,7 +168,7 @@ public final class PlannerOrchestrator {
 		}
 
 		toolUsed = true;
-		toolResultFuture = requestVisionTool(toolRequest.prompt());
+		toolResultFuture = requestVisionTool(toolRequest);
 		return null;
 	}
 
@@ -209,25 +223,24 @@ public final class PlannerOrchestrator {
 	}
 
 	private boolean submitPlannerConversation(PlannerRequest request) {
-		LlmConversation conversation = request.toolResult() == null || request.toolResult().isBlank()
-			? contextAggregator.buildPlannerConversation(request)
-			: contextAggregator.buildPlannerFollowUpConversation(request.toolResult());
-		return plannerExecutor.submit(request, conversation);
+		return plannerExecutor.submit(request, contextAggregator.buildPlannerConversation(request));
 	}
 
 	private PlannerExecutionResult continueAfterTool() {
-		String toolResultText;
+		ToolExecutionOutcome toolOutcome;
 		try {
-			toolResultText = toolResultFuture.join();
+			toolOutcome = toolResultFuture.join();
 		}
 		catch (CompletionException exception) {
-			toolResultText = "VISION_UNAVAILABLE: vision_failed";
+			toolOutcome = new TextToolExecutionOutcome("VISION_UNAVAILABLE: vision_failed");
 			Airicraft.LOGGER.warn("Planner tool future failed sender={}", baseRequest == null ? null : baseRequest.senderName(), exception);
 		}
 		finally {
 			toolResultFuture = null;
+			captureInFlight = false;
 		}
 
+		String toolResultText = toolOutcome.toolResultText();
 		PlannerRequest followUpRequest = new PlannerRequest(
 			baseRequest.tick(),
 			baseRequest.timestampMs(),
@@ -238,7 +251,7 @@ public final class PlannerOrchestrator {
 			baseRequest.message(),
 			toolResultText
 		);
-		if (!submitPlannerConversation(followUpRequest)) {
+		if (!plannerExecutor.submit(followUpRequest, toolOutcome.appendFollowUp(contextAggregator))) {
 			PlannerExecutionResult failure = new PlannerExecutionResult(
 				followUpRequest,
 				null,
@@ -252,20 +265,68 @@ public final class PlannerOrchestrator {
 		return null;
 	}
 
-	private CompletableFuture<String> requestVisionTool(String prompt) {
-		if (!visionTool.isConfigured()) {
-			return CompletableFuture.completedFuture("VISION_UNAVAILABLE: vision_provider_unavailable");
+	private CompletableFuture<ToolExecutionOutcome> requestVisionTool(PlannerToolRequest toolRequest) {
+		if (visionMode == PlannerVisionMode.EXTERNAL_SUMMARY) {
+			if (!visionTool.isConfigured()) {
+				return CompletableFuture.completedFuture(new TextToolExecutionOutcome("VISION_UNAVAILABLE: vision_provider_unavailable"));
+			}
+
+			return requestCapture()
+				.handle((capture, throwable) -> {
+					if (throwable != null) {
+						String code = visionFailureCode(throwable);
+						Airicraft.LOGGER.warn("Vision tool capture failed code={}", code, throwable);
+						return CompletableFuture.<ToolExecutionOutcome>completedFuture(new TextToolExecutionOutcome("VISION_UNAVAILABLE: " + code));
+					}
+					return visionTool.requestDescription(capture, toolRequest.prompt())
+						.<ToolExecutionOutcome>handle((description, throwable2) -> {
+							if (throwable2 == null) {
+								return new TextToolExecutionOutcome(description.text());
+							}
+							String code = visionFailureCode(throwable2);
+							Airicraft.LOGGER.warn("Vision tool failed code={}", code, throwable2);
+							return new TextToolExecutionOutcome("VISION_UNAVAILABLE: " + code);
+						});
+				})
+				.thenCompose(future -> future);
 		}
 
-		return visionTool.requestDescription(prompt)
-			.handle((description, throwable) -> {
-				if (throwable == null) {
-					return description.text();
-				}
-				String code = visionFailureCode(throwable);
-				Airicraft.LOGGER.warn("Vision tool failed code={}", code, throwable);
-				return "VISION_UNAVAILABLE: " + code;
-			});
+		return requestCapture().handle((capture, throwable) -> {
+			if (throwable == null) {
+				return new ImageToolExecutionOutcome(
+					NATIVE_TOOL_RESULT_TEXT,
+					new LlmImageAttachment(mimeType(capture), capture.imageBytes(), imageDetail)
+				);
+			}
+			String code = visionFailureCode(throwable);
+			Airicraft.LOGGER.warn("Vision tool capture failed code={}", code, throwable);
+			return new TextToolExecutionOutcome("VISION_UNAVAILABLE: " + code);
+		});
+	}
+
+	private CompletableFuture<FirstPersonScreenshotService.CapturedScreenshot> requestCapture() {
+		captureInFlight = true;
+		try {
+			return visionTool.requestCapture().whenComplete((capture, throwable) -> captureInFlight = false);
+		}
+		catch (RuntimeException exception) {
+			captureInFlight = false;
+			return CompletableFuture.failedFuture(exception);
+		}
+	}
+
+	private static String mimeType(FirstPersonScreenshotService.CapturedScreenshot capture) {
+		return "image/" + capture.format().toLowerCase(Locale.ROOT);
+	}
+
+	private boolean isValidToolRequest(PlannerToolRequest toolRequest) {
+		if (!VISUAL_TOOL_NAME.equals(toolRequest.type())) {
+			return false;
+		}
+		if (visionMode == PlannerVisionMode.NATIVE_TOOL_IMAGE) {
+			return true;
+		}
+		return toolRequest.prompt() != null && !toolRequest.prompt().isBlank();
 	}
 
 	private static boolean hasToolCompatibleIntent(PlannerResponse response) {
@@ -293,6 +354,27 @@ public final class PlannerOrchestrator {
 		baseRequest = null;
 		toolUsed = false;
 		toolResultFuture = null;
+		captureInFlight = false;
+	}
+
+	private sealed interface ToolExecutionOutcome permits TextToolExecutionOutcome, ImageToolExecutionOutcome {
+		String toolResultText();
+
+		LlmConversation appendFollowUp(PlannerContextAggregator contextAggregator);
+	}
+
+	private record TextToolExecutionOutcome(String toolResultText) implements ToolExecutionOutcome {
+		@Override
+		public LlmConversation appendFollowUp(PlannerContextAggregator contextAggregator) {
+			return contextAggregator.buildPlannerFollowUpConversation(toolResultText);
+		}
+	}
+
+	private record ImageToolExecutionOutcome(String toolResultText, LlmImageAttachment imageAttachment) implements ToolExecutionOutcome {
+		@Override
+		public LlmConversation appendFollowUp(PlannerContextAggregator contextAggregator) {
+			return contextAggregator.buildPlannerFollowUpConversation(toolResultText, imageAttachment);
+		}
 	}
 
 	private static String visionFailureCode(Throwable throwable) {

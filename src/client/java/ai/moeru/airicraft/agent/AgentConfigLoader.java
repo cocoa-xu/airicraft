@@ -68,7 +68,8 @@ public final class AgentConfigLoader {
 			readInt(root, "visionRequestTimeoutMillis", defaults.llm().visionRequestTimeoutMillis()),
 			readInt(root, "maxRecentConversationTurns", defaults.llm().maxRecentConversationTurns()),
 			readInt(root, "plannerCompactionTriggerTokens", defaults.llm().plannerCompactionTriggerTokens()),
-			readString(root, "visionImageDetail", defaults.llm().visionImageDetail())
+			readString(root, "visionImageDetail", defaults.llm().visionImageDetail()),
+			readBoolean(root, "plannerNativeVisionEnabled", defaults.llm().plannerNativeVisionEnabled())
 		);
 		return new AgentConfig(defaults.verificationEnabled(), defaults.verificationAutoRunAll(), llm);
 	}
@@ -120,6 +121,7 @@ public final class AgentConfigLoader {
 		yamlData.put("maxRecentConversationTurns", readInt(root, "maxRecentConversationTurns", defaults.llm().maxRecentConversationTurns()));
 		yamlData.put("plannerCompactionTriggerTokens", readInt(root, "plannerCompactionTriggerTokens", defaults.llm().plannerCompactionTriggerTokens()));
 		yamlData.put("visionImageDetail", readString(root, "visionImageDetail", defaults.llm().visionImageDetail()));
+		yamlData.put("plannerNativeVisionEnabled", readBoolean(root, "plannerNativeVisionEnabled", defaults.llm().plannerNativeVisionEnabled()));
 		Files.writeString(yamlConfigPath, dumpYaml(yamlData), StandardCharsets.UTF_8);
 	}
 

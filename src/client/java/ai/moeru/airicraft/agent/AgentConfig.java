@@ -20,7 +20,8 @@ public record AgentConfig(
 		int visionRequestTimeoutMillis,
 		int maxRecentConversationTurns,
 		int plannerCompactionTriggerTokens,
-		String visionImageDetail
+		String visionImageDetail,
+		boolean plannerNativeVisionEnabled
 	) {
 		public static LlmConfig defaults() {
 			return new LlmConfig(
@@ -34,7 +35,8 @@ public record AgentConfig(
 				10_000,
 				8,
 				65_536,
-				"low"
+				"low",
+				false
 			);
 		}
 
@@ -54,6 +56,12 @@ public record AgentConfig(
 				&& !visionApiKey.isBlank()
 				&& visionModel != null
 				&& !visionModel.isBlank();
+		}
+
+		public ai.moeru.airicraft.agent.llm.PlannerVisionMode plannerVisionMode() {
+			return plannerNativeVisionEnabled
+				? ai.moeru.airicraft.agent.llm.PlannerVisionMode.NATIVE_TOOL_IMAGE
+				: ai.moeru.airicraft.agent.llm.PlannerVisionMode.EXTERNAL_SUMMARY;
 		}
 	}
 }

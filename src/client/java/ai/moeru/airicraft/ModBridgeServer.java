@@ -534,6 +534,7 @@ public final class ModBridgeServer {
 	private Object createAgentStatusResponse() {
 		return onClientThread(() -> {
 			var snapshot = agentRuntime.snapshot();
+			var plannerSnapshot = agentRuntime.plannerDebugSnapshot();
 			Map<String, Object> response = new LinkedHashMap<>();
 			response.put("available", true);
 			response.put("bridgeAvailable", true);
@@ -543,6 +544,7 @@ public final class ModBridgeServer {
 			response.put("session", snapshot.session());
 			response.put("llmAvailable", agentRuntime.llmAvailable());
 			response.put("visionAvailable", agentRuntime.visionAvailable());
+			response.put("plannerVisionMode", plannerSnapshot.plannerVisionMode());
 			response.put("degraded", agentRuntime.isDegraded());
 			response.put("verification", snapshot.verification());
 			return response;

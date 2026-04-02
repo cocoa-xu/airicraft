@@ -62,8 +62,14 @@ public final class DialogueRuntime {
 			new PlannerOrchestrator(
 				plannerExecutor,
 				new PlannerCompactionService(new OpenAiCompatibleChatClient(ai.moeru.airicraft.agent.AgentConfig.LlmConfig.defaults())),
-				new PlannerContextAggregator(Clock.systemDefaultZone(), ai.moeru.airicraft.agent.AgentConfig.LlmConfig.defaults().plannerCompactionTriggerTokens()),
-				CurrentViewVisionTool.disabled()
+				new PlannerContextAggregator(
+					Clock.systemDefaultZone(),
+					ai.moeru.airicraft.agent.AgentConfig.LlmConfig.defaults().plannerCompactionTriggerTokens(),
+					ai.moeru.airicraft.agent.AgentConfig.LlmConfig.defaults().plannerVisionMode()
+				),
+				CurrentViewVisionTool.disabled(),
+				ai.moeru.airicraft.agent.AgentConfig.LlmConfig.defaults().plannerVisionMode(),
+				ai.moeru.airicraft.agent.AgentConfig.LlmConfig.defaults().visionImageDetail()
 			),
 			maxRecentTurns,
 			Clock.systemDefaultZone()
@@ -317,8 +323,10 @@ public final class DialogueRuntime {
 		return new PlannerOrchestrator(
 			new PlannerExecutor(new OpenAiCompatibleLlmBackend(config)),
 			new PlannerCompactionService(new OpenAiCompatibleChatClient(config)),
-			new PlannerContextAggregator(clock, config.plannerCompactionTriggerTokens()),
-			CurrentViewVisionTool.disabled()
+			new PlannerContextAggregator(clock, config.plannerCompactionTriggerTokens(), config.plannerVisionMode()),
+			CurrentViewVisionTool.disabled(),
+			config.plannerVisionMode(),
+			config.visionImageDetail()
 		);
 	}
 }

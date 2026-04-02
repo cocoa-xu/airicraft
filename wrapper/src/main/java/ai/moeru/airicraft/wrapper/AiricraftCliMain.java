@@ -782,7 +782,7 @@ public final class AiricraftCliMain {
 
 		private static Map<String, Object> agentStatus(Map<String, Object> payload, boolean verbose) {
 			LinkedHashMap<String, Object> view = new LinkedHashMap<>();
-			copy(view, payload, "available", "initialized", "tickCount", "llmAvailable", "visionAvailable", "degraded");
+			copy(view, payload, "available", "initialized", "tickCount", "llmAvailable", "visionAvailable", "plannerVisionMode", "degraded");
 			if (payload.containsKey("session")) {
 				view.put("session", payload.get("session"));
 			}
@@ -843,7 +843,7 @@ public final class AiricraftCliMain {
 			view.put("available", payload.getOrDefault("available", false));
 			Map<String, Object> planner = map(payload.get("planner"));
 			Map<String, Object> context = map(planner.get("context"));
-			copy(view, planner, "configured", "inFlight", "plannerInFlight", "compactionInFlight", "toolInFlight", "toolUsed");
+			copy(view, planner, "configured", "plannerVisionMode", "inFlight", "plannerInFlight", "compactionInFlight", "captureInFlight", "toolInFlight", "toolUsed");
 			copy(view, context, "compactionTriggerTokens", "compactionPending", "rawArchiveEntryCount", "canonicalMessageCount",
 				"pendingEntryCount", "frozenPlannerMessageCount", "lastObservedEventSeqNo", "lastTimeBeaconAtMs");
 			if (verbose) {

@@ -14,6 +14,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -98,8 +99,26 @@ public final class OpenAiCompatibleChatClient {
 	private Map<String, Object> toRequestMessage(LlmChatMessage message) {
 		LinkedHashMap<String, Object> payload = new LinkedHashMap<>();
 		payload.put("role", message.role());
-		payload.put("content", message.content());
+		payload.put("content", message.hasImageAttachment() ? multimodalContent(message) : message.content());
 		return payload;
+	}
+
+	private static List<Map<String, Object>> multimodalContent(LlmChatMessage message) {
+		LlmImageAttachment imageAttachment = Objects.requireNonNull(message.imageAttachment(), "imageAttachment");
+		String imageUrl = "data:%s;base64,%s".formatted(
+			imageAttachment.mimeType(),
+			Base64.getEncoder().encodeToString(imageAttachment.imageBytes())
+		);
+		return List.of(
+			Map.of("type", "text", "text", message.content()),
+			Map.of(
+				"type", "image_url",
+				"image_url", Map.of(
+					"url", imageUrl,
+					"detail", imageAttachment.detail()
+				)
+			)
+		);
 	}
 
 	private static LlmUsageSnapshot parseUsage(String responseBody) {
@@ -138,9 +157,16 @@ public final class OpenAiCompatibleChatClient {
 			if (!builder.isEmpty()) {
 				builder.append(" | ");
 			}
-			builder.append(message.role()).append(':').append(summarizeForLog(message.content()));
+			builder.append(message.role()).append(':').append(summarizeForLog(summarizeMessage(message)));
 		}
 		return summarizeForLog(builder.toString());
+	}
+
+	private static String summarizeMessage(LlmChatMessage message) {
+		if (!message.hasImageAttachment()) {
+			return message.content();
+		}
+		return message.content() + " [image attached detail=" + message.imageAttachment().detail() + "]";
 	}
 
 	static String summarizeForLog(String text) {

@@ -20,7 +20,7 @@ class PlannerContextAggregatorTest {
 	@Test
 	void injectsSingleTimeBeaconPerThirtyMinuteWindow() {
 		Clock clock = Clock.fixed(Instant.ofEpochMilli(1_000L), ZoneId.of("Asia/Taipei"));
-		PlannerContextAggregator aggregator = new PlannerContextAggregator(clock, 65_536);
+		PlannerContextAggregator aggregator = new PlannerContextAggregator(clock, 65_536, PlannerVisionMode.EXTERNAL_SUMMARY);
 
 		LlmConversation first = aggregator.buildPlannerConversation(requestAt(1_000L, "Alice", "@agent hi"));
 		assertEquals(6, first.messages().size());
@@ -42,7 +42,7 @@ class PlannerContextAggregatorTest {
 	@Test
 	void recordsAmbientContextAndSemanticEventsAsFrozenNotices() {
 		Clock clock = Clock.fixed(Instant.ofEpochMilli(10_000L), ZoneId.of("Asia/Taipei"));
-		PlannerContextAggregator aggregator = new PlannerContextAggregator(clock, 65_536);
+		PlannerContextAggregator aggregator = new PlannerContextAggregator(clock, 65_536, PlannerVisionMode.EXTERNAL_SUMMARY);
 		aggregator.recordEvents(List.of(
 			new SemanticEvent(1L, 100L, 8_000L, "follow.target_acquired", Map.of("player", "Alice")),
 			new SemanticEvent(2L, 101L, 9_000L, "planner.goal_set", Map.of("goalType", "FOLLOW_PLAYER", "targetPlayer", "Alice"))
@@ -68,7 +68,7 @@ class PlannerContextAggregatorTest {
 	@Test
 	void compactionConversationAppendsTaskInstructionAtTail() {
 		Clock clock = Clock.fixed(Instant.ofEpochMilli(1_000L), ZoneId.of("Asia/Taipei"));
-		PlannerContextAggregator aggregator = new PlannerContextAggregator(clock, 65_536);
+		PlannerContextAggregator aggregator = new PlannerContextAggregator(clock, 65_536, PlannerVisionMode.EXTERNAL_SUMMARY);
 
 		aggregator.buildPlannerConversation(requestAt(1_000L, "Alice", "@agent hi"));
 		aggregator.recordUsage(new LlmUsageSnapshot(70_000, 200, 70_200));
