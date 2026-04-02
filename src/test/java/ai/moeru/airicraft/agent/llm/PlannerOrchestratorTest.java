@@ -114,6 +114,41 @@ class PlannerOrchestratorTest {
 	}
 
 	@Test
+	void toolRequestIgnoresReplyOnlyIntentAndContinuesToolFlow() {
+		OpenAiCompatibleLlmBackend backend = new OpenAiCompatibleLlmBackend(AgentConfig.LlmConfig.defaults());
+		backend.injectMockResponse(new PlannerResponse(
+			"I need to look around first!",
+			new PlannerIntent("reply_only", null, null),
+			new PlannerToolRequest("take_a_look", "Describe the scene.")
+		));
+		backend.injectMockResponse(new PlannerResponse(
+			"I can see a forested hill ahead.",
+			new PlannerIntent("reply_only", null, null)
+		));
+		PlannerOrchestrator orchestrator = newOrchestrator(
+			backend,
+			new StubVisionTool(
+				true,
+				CompletableFuture.completedFuture(capturedScreenshot()),
+				CompletableFuture.completedFuture(new VisionDescription(
+					"A birch forest hill under open sky.",
+					"gpt-4.1-mini",
+					1L
+				))
+			),
+			PlannerVisionMode.EXTERNAL_SUMMARY
+		);
+
+		orchestrator.submit(baseRequest(null));
+		PlannerExecutionResult result = awaitResult(orchestrator);
+
+		assertNotNull(result);
+		assertTrue(result.succeeded());
+		assertEquals("I can see a forested hill ahead.", result.response().replyText());
+		assertEquals("A birch forest hill under open sky.", result.request().toolResult());
+	}
+
+	@Test
 	void toolFailureFallsBackToSyntheticUnavailableMarker() {
 		OpenAiCompatibleLlmBackend backend = new OpenAiCompatibleLlmBackend(AgentConfig.LlmConfig.defaults());
 		backend.injectMockResponse(new PlannerResponse(

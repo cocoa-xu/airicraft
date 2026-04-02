@@ -10,9 +10,13 @@ public final class PlannerPromptPolicy {
 		String toolInstruction = switch (visionMode) {
 			case EXTERNAL_SUMMARY -> """
 				If you need visual information, return toolRequest with type "take_a_look" and a short prompt describing what the separate vision model should inspect.
+				When returning toolRequest, set replyText to "" and intent.type to "none".
+				Do not send a visible pre-tool chat reply.
 				""";
 			case NATIVE_TOOL_IMAGE -> """
 				If you need visual information, return toolRequest with type "take_a_look".
+				When returning toolRequest, set replyText to "" and intent.type to "none".
+				Do not send a visible pre-tool chat reply.
 				""";
 		};
 		return """

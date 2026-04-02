@@ -139,16 +139,17 @@ public final class PlannerOrchestrator {
 			clearState();
 			return parseFailure("Planner requested take_a_look more than once");
 		}
+		String toolIntentType = toolIntentType(plannerResult.response());
 		if (!hasToolCompatibleIntent(plannerResult.response())) {
 			Airicraft.LOGGER.warn(
 				"Planner returned invalid tool response intentType={} toolRequestType={} toolPrompt={} replyText={}",
-				plannerResult.response().intent() == null ? null : plannerResult.response().intent().type(),
+				toolIntentType,
 				toolRequest.type(),
 				summarizeForLog(toolRequest.prompt()),
 				summarizeForLog(plannerResult.response().replyText())
 			);
 			clearState();
-			return parseFailure("Tool requests must set intent.type to none");
+			return parseFailure("Tool requests cannot set goal intents");
 		}
 		if (!isValidToolRequest(toolRequest)) {
 			Airicraft.LOGGER.warn(
@@ -158,6 +159,13 @@ public final class PlannerOrchestrator {
 			);
 			clearState();
 			return parseFailure("Planner requested an invalid tool");
+		}
+		if (!"none".equals(toolIntentType)) {
+			Airicraft.LOGGER.info(
+				"Planner returned tool request with non-none intent; ignoring intentType={} toolRequestType={}",
+				toolIntentType,
+				toolRequest.type()
+			);
 		}
 		if (plannerResult.response().replyText() != null && !plannerResult.response().replyText().isBlank()) {
 			Airicraft.LOGGER.info(
@@ -330,9 +338,15 @@ public final class PlannerOrchestrator {
 	}
 
 	private static boolean hasToolCompatibleIntent(PlannerResponse response) {
+		return switch (toolIntentType(response)) {
+			case "none", "reply_only", "ask_clarification", "acknowledge_failure" -> true;
+			default -> false;
+		};
+	}
+
+	private static String toolIntentType(PlannerResponse response) {
 		PlannerIntent intent = response.intent();
-		String intentType = intent == null || intent.type() == null ? "none" : intent.type();
-		return "none".equals(intentType);
+		return intent == null || intent.type() == null ? "none" : intent.type();
 	}
 
 	private PlannerExecutionResult parseFailure(String message) {
