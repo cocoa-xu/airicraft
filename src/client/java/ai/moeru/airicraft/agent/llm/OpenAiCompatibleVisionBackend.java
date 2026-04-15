@@ -35,7 +35,9 @@ public final class OpenAiCompatibleVisionBackend implements VisionBackend {
 
 	private final AgentConfig.LlmConfig config;
 	private final AgentObservability observability;
-	private final HttpClient httpClient = HttpClient.newHttpClient();
+	private final HttpClient httpClient = HttpClient.newBuilder()
+		.version(HttpClient.Version.HTTP_1_1)
+		.build();
 
 	public OpenAiCompatibleVisionBackend(AgentConfig.LlmConfig config) {
 		this(config, NoopObservability.INSTANCE);

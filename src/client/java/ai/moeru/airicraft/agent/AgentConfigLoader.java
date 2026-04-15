@@ -74,7 +74,8 @@ public final class AgentConfigLoader {
 			readInt(root, "plannerSessionCoalesceMinMillis", defaults.llm().plannerSessionCoalesceMinMillis()),
 			readInt(root, "plannerSessionCoalesceMaxMillis", defaults.llm().plannerSessionCoalesceMaxMillis()),
 			readString(root, "visionImageDetail", defaults.llm().visionImageDetail()),
-			readBoolean(root, "plannerNativeVisionEnabled", defaults.llm().plannerNativeVisionEnabled())
+			readBoolean(root, "plannerNativeVisionEnabled", defaults.llm().plannerNativeVisionEnabled()),
+			readBoolean(root, "plannerUseJsonObjectResponseFormat", defaults.llm().plannerUseJsonObjectResponseFormat())
 		);
 		warnIfMalformedObject(root, "observability");
 		Map<String, Object> observabilityRoot = readObjectMap(root, "observability");
@@ -146,6 +147,10 @@ public final class AgentConfigLoader {
 		yamlData.put("plannerSessionCoalesceMaxMillis", readInt(root, "plannerSessionCoalesceMaxMillis", defaults.llm().plannerSessionCoalesceMaxMillis()));
 		yamlData.put("visionImageDetail", readString(root, "visionImageDetail", defaults.llm().visionImageDetail()));
 		yamlData.put("plannerNativeVisionEnabled", readBoolean(root, "plannerNativeVisionEnabled", defaults.llm().plannerNativeVisionEnabled()));
+		yamlData.put(
+			"plannerUseJsonObjectResponseFormat",
+			readBoolean(root, "plannerUseJsonObjectResponseFormat", defaults.llm().plannerUseJsonObjectResponseFormat())
+		);
 		yamlData.put("observability", Map.of(
 			"enabled", defaults.observability().enabled(),
 			"exporter", defaults.observability().exporter(),

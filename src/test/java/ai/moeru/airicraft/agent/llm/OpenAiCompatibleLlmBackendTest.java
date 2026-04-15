@@ -35,6 +35,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class OpenAiCompatibleLlmBackendTest {
@@ -71,6 +72,7 @@ class OpenAiCompatibleLlmBackendTest {
 			String body = bodyRef.get();
 			assertTrue(body.contains("\"role\":\"system\""));
 			assertTrue(body.contains("Alice said just now"));
+			assertTrue(body.contains("\"response_format\":{\"type\":\"json_object\"}"));
 		}
 	}
 
@@ -961,13 +963,56 @@ class OpenAiCompatibleLlmBackendTest {
 		}
 	}
 
+	@Test
+	void generateOmitsResponseFormatWhenConfigDisablesIt() throws Exception {
+		AtomicReference<String> bodyRef = new AtomicReference<>();
+		try (TestServer server = TestServer.start(bodyRef, """
+			{
+			  "choices": [
+			    {
+			      "message": {
+			        "content": "{\\"replyText\\":\\"hello\\",\\"intent\\":{\\"type\\":\\"none\\"},\\"toolRequest\\":null}"
+			      }
+			    }
+			  ],
+			  "usage": {
+			    "prompt_tokens": 12,
+			    "completion_tokens": 7,
+			    "total_tokens": 19
+			  }
+			}
+			""")) {
+			OpenAiCompatibleLlmBackend backend = new OpenAiCompatibleLlmBackend(new AgentConfig.LlmConfig(
+				"http://127.0.0.1:" + server.port(),
+				"planner-key",
+				"planner-model",
+				"https://api.openai.com/v1",
+				"",
+				"",
+				15_000,
+				10_000,
+				8,
+				65_536,
+				"low",
+				false,
+				false
+			));
+
+			LlmCallResult<PlannerResponse> result = backend.generate(LlmConversation.of(List.of(
+				LlmChatMessage.system("system"),
+				LlmChatMessage.user("Alice said just now: @agent hello", LlmMessageKind.USER_TURN)
+			)));
+
+			assertEquals("hello", result.payload().replyText());
+			assertFalse(bodyRef.get().contains("\"response_format\""));
+		}
+	}
+
 	private static final class TestServer implements AutoCloseable {
 		private final HttpServer server;
-		private final String responseBody;
 
-		private TestServer(HttpServer server, String responseBody) {
+		private TestServer(HttpServer server) {
 			this.server = server;
-			this.responseBody = responseBody;
 		}
 
 		private static TestServer start(AtomicReference<String> bodyRef) throws IOException {
@@ -994,7 +1039,7 @@ class OpenAiCompatibleLlmBackendTest {
 			server.setExecutor(Executors.newCachedThreadPool());
 			server.createContext("/chat/completions", exchange -> handle(exchange, bodyRef, responseBody));
 			server.start();
-			return new TestServer(server, responseBody);
+			return new TestServer(server);
 		}
 
 		private static void handle(HttpExchange exchange, AtomicReference<String> bodyRef, String responseBody) throws IOException {

@@ -27,7 +27,8 @@ public record AgentConfig(
 		int plannerSessionCoalesceMinMillis,
 		int plannerSessionCoalesceMaxMillis,
 		String visionImageDetail,
-		boolean plannerNativeVisionEnabled
+		boolean plannerNativeVisionEnabled,
+		boolean plannerUseJsonObjectResponseFormat
 	) {
 		public LlmConfig {
 			plannerPendingSemanticEventCap = Math.max(1, plannerPendingSemanticEventCap);
@@ -61,13 +62,46 @@ public record AgentConfig(
 				visionRequestTimeoutMillis,
 				maxRecentConversationTurns,
 				plannerCompactionTriggerTokens,
+				visionImageDetail,
+				plannerNativeVisionEnabled,
+				true
+			);
+		}
+
+		public LlmConfig(
+			String providerBaseUrl,
+			String apiKey,
+			String model,
+			String visionProviderBaseUrl,
+			String visionApiKey,
+			String visionModel,
+			int requestTimeoutMillis,
+			int visionRequestTimeoutMillis,
+			int maxRecentConversationTurns,
+			int plannerCompactionTriggerTokens,
+			String visionImageDetail,
+			boolean plannerNativeVisionEnabled,
+			boolean plannerUseJsonObjectResponseFormat
+		) {
+			this(
+				providerBaseUrl,
+				apiKey,
+				model,
+				visionProviderBaseUrl,
+				visionApiKey,
+				visionModel,
+				requestTimeoutMillis,
+				visionRequestTimeoutMillis,
+				maxRecentConversationTurns,
+				plannerCompactionTriggerTokens,
 				128,
 				3,
 				10,
 				10,
 				100,
 				visionImageDetail,
-				plannerNativeVisionEnabled
+				plannerNativeVisionEnabled,
+				plannerUseJsonObjectResponseFormat
 			);
 		}
 
@@ -86,11 +120,12 @@ public record AgentConfig(
 				128,
 				3,
 				10,
-				10,
-				100,
-				"low",
-				false
-			);
+					10,
+					100,
+					"low",
+					false,
+					true
+				);
 		}
 
 		public boolean isConfigured() {

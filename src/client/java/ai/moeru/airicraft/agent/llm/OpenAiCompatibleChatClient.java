@@ -27,10 +27,13 @@ import java.util.Objects;
 
 public final class OpenAiCompatibleChatClient {
 	private static final Gson GSON = new Gson();
+	private static final String JSON_OBJECT_RESPONSE_FORMAT = "json_object";
 
 	private final AgentConfig.LlmConfig config;
 	private final AgentObservability observability;
-	private final HttpClient httpClient = HttpClient.newHttpClient();
+	private final HttpClient httpClient = HttpClient.newBuilder()
+		.version(HttpClient.Version.HTTP_1_1)
+		.build();
 
 	public OpenAiCompatibleChatClient(AgentConfig.LlmConfig config) {
 		this(config, NoopObservability.INSTANCE);
@@ -47,7 +50,6 @@ public final class OpenAiCompatibleChatClient {
 			throw new LlmBackendException(LlmFailureType.PROVIDER_UNAVAILABLE, "LLM provider is not configured");
 		}
 
-		String requestBody = GSON.toJson(buildRequestPayload(conversation));
 		URI uri;
 		try {
 			uri = buildUri();
@@ -56,6 +58,40 @@ public final class OpenAiCompatibleChatClient {
 			observability.recordFailure(Context.current(), exception.failureType().name(), exception.getMessage(), exception);
 			throw exception;
 		}
+
+		String requestBody = GSON.toJson(buildRequestPayload(conversation));
+		HttpResponse<String> response = sendHttpRequest(uri, conversation, requestBody);
+		if (response.statusCode() >= 400) {
+			String message = providerErrorMessage(response.statusCode(), response.body());
+			observability.recordFailure(
+				Context.current(),
+				LlmFailureType.PROVIDER_ERROR.name(),
+				message,
+				null
+			);
+			throw new LlmBackendException(LlmFailureType.PROVIDER_ERROR, message);
+		}
+		return LlmCallResult.of(
+			response.body(),
+			parseUsage(response.body()),
+			response.statusCode(),
+			responseModel(response.body()).orElse(config.model())
+		);
+	}
+
+	private URI buildUri() throws LlmBackendException {
+		try {
+			String baseUrl = config.providerBaseUrl().endsWith("/")
+				? config.providerBaseUrl().substring(0, config.providerBaseUrl().length() - 1)
+				: config.providerBaseUrl();
+			return URI.create(baseUrl + "/chat/completions");
+		}
+		catch (IllegalArgumentException exception) {
+			throw new LlmBackendException(LlmFailureType.PROVIDER_UNAVAILABLE, "Invalid LLM provider URL", exception);
+		}
+	}
+
+	private HttpResponse<String> sendHttpRequest(URI uri, LlmConversation conversation, String requestBody) throws LlmBackendException {
 		observability.recordLlmRequest(
 			Context.current(),
 			TraceSanitizer.inferProviderName(config.providerBaseUrl()),
@@ -71,11 +107,15 @@ public final class OpenAiCompatibleChatClient {
 			conversation.messages().size(),
 			TraceSanitizer.summarizeForLog(TraceSanitizer.sanitizeRequestPayloadForTrace(requestBody))
 		);
-		HttpRequest httpRequest = HttpRequest.newBuilder()
+
+		HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
 			.uri(uri)
 			.timeout(Duration.ofMillis(config.requestTimeoutMillis()))
-			.header("Authorization", "Bearer " + config.apiKey())
-			.header("Content-Type", "application/json")
+			.header("Content-Type", "application/json");
+		if (config.apiKey() != null && !config.apiKey().isBlank()) {
+			requestBuilder.header("Authorization", "Bearer " + config.apiKey());
+		}
+		HttpRequest httpRequest = requestBuilder
 			.POST(HttpRequest.BodyPublishers.ofString(requestBody, StandardCharsets.UTF_8))
 			.build();
 
@@ -87,21 +127,7 @@ public final class OpenAiCompatibleChatClient {
 				response.statusCode(),
 				TraceSanitizer.summarizeChatResponseForLog(response.body())
 			);
-			if (response.statusCode() >= 400) {
-				observability.recordFailure(
-					Context.current(),
-					LlmFailureType.PROVIDER_ERROR.name(),
-					"Provider returned HTTP " + response.statusCode(),
-					null
-				);
-				throw new LlmBackendException(LlmFailureType.PROVIDER_ERROR, "Provider returned HTTP " + response.statusCode());
-			}
-			return LlmCallResult.of(
-				response.body(),
-				parseUsage(response.body()),
-				response.statusCode(),
-				responseModel(response.body()).orElse(config.model())
-			);
+			return response;
 		}
 		catch (java.net.http.HttpTimeoutException exception) {
 			observability.recordFailure(Context.current(), LlmFailureType.TIMEOUT.name(), "LLM request timed out", exception);
@@ -118,24 +144,14 @@ public final class OpenAiCompatibleChatClient {
 		}
 	}
 
-	private URI buildUri() throws LlmBackendException {
-		try {
-			String baseUrl = config.providerBaseUrl().endsWith("/")
-				? config.providerBaseUrl().substring(0, config.providerBaseUrl().length() - 1)
-				: config.providerBaseUrl();
-			return URI.create(baseUrl + "/chat/completions");
-		}
-		catch (IllegalArgumentException exception) {
-			throw new LlmBackendException(LlmFailureType.PROVIDER_UNAVAILABLE, "Invalid LLM provider URL", exception);
-		}
-	}
-
 	private Map<String, Object> buildRequestPayload(LlmConversation conversation) {
-		return Map.of(
-			"model", config.model(),
-			"response_format", Map.of("type", "json_object"),
-			"messages", compactRequestMessages(conversation.messages())
-		);
+		LinkedHashMap<String, Object> payload = new LinkedHashMap<>();
+		payload.put("model", config.model());
+		if (config.plannerUseJsonObjectResponseFormat()) {
+			payload.put("response_format", Map.of("type", JSON_OBJECT_RESPONSE_FORMAT));
+		}
+		payload.put("messages", compactRequestMessages(conversation.messages()));
+		return payload;
 	}
 
 	private Map<String, Object> toRequestMessage(LlmChatMessage message) {
@@ -259,6 +275,35 @@ public final class OpenAiCompatibleChatClient {
 
 	static java.util.Optional<String> responseModel(String responseBody) {
 		return TraceSanitizer.responseModel(responseBody);
+	}
+
+	private static String providerErrorMessage(int statusCode, String responseBody) {
+		String detail = extractErrorDetail(responseBody);
+		if (detail == null || detail.isBlank()) {
+			return "Provider returned HTTP " + statusCode;
+		}
+		return "Provider returned HTTP " + statusCode + ": " + detail;
+	}
+
+	private static String extractErrorDetail(String responseBody) {
+		if (responseBody == null || responseBody.isBlank()) {
+			return null;
+		}
+		try {
+			JsonObject root = JsonParser.parseString(responseBody).getAsJsonObject();
+			if (root.has("error") && !root.get("error").isJsonNull()) {
+				return root.get("error").isJsonPrimitive()
+					? root.get("error").getAsString()
+					: summarizeForLog(root.get("error").toString());
+			}
+			if (root.has("message") && !root.get("message").isJsonNull()) {
+				return root.get("message").getAsString();
+			}
+		}
+		catch (IllegalStateException | JsonParseException ignored) {
+			// Fall back to plain-text summary below.
+		}
+		return summarizeForLog(responseBody);
 	}
 
 	static String summarizeForLog(String text) {

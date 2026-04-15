@@ -51,6 +51,10 @@ visionImageDetail: "low"
 # When false, the visual tool uses the external vision model to summarize the screenshot first.
 plannerNativeVisionEnabled: false
 
+# When true, planner requests include response_format.type=json_object for stricter JSON responses.
+# Set this to false for compatible providers like some LM Studio setups that reject json_object.
+plannerUseJsonObjectResponseFormat: true
+
 observability:
   # Enable vendor-neutral OpenTelemetry tracing for outbound planner and vision model calls.
   enabled: false

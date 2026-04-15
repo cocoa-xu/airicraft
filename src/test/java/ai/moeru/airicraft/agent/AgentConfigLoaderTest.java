@@ -20,7 +20,8 @@ class AgentConfigLoaderTest {
 			"visionApiKey", "vision-key",
 			"visionRequestTimeoutMillis", 7777,
 			"visionImageDetail", "high",
-			"plannerNativeVisionEnabled", true
+			"plannerNativeVisionEnabled", true,
+			"plannerUseJsonObjectResponseFormat", false
 		), defaults);
 
 		assertEquals("https://example.test/v1", parsed.llm().providerBaseUrl());
@@ -37,7 +38,13 @@ class AgentConfigLoaderTest {
 		assertEquals(100, parsed.llm().plannerSessionCoalesceMaxMillis());
 		assertEquals("high", parsed.llm().visionImageDetail());
 		assertEquals(true, parsed.llm().plannerNativeVisionEnabled());
+		assertEquals(false, parsed.llm().plannerUseJsonObjectResponseFormat());
 		assertFalse(parsed.llm().visionConfigured());
+	}
+
+	@Test
+	void defaultsEnablePlannerJsonObjectResponseFormat() {
+		assertEquals(true, AgentConfig.defaults().llm().plannerUseJsonObjectResponseFormat());
 	}
 
 	@Test
