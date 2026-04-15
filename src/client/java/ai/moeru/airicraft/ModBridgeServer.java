@@ -1,11 +1,17 @@
 package ai.moeru.airicraft;
 
 import ai.moeru.airicraft.agent.EmbodiedAgentRuntime;
+import ai.moeru.airicraft.agent.verification.VerificationPlayerProbe;
 import ai.moeru.airicraft.agent.llm.CurrentViewVisionService;
 import ai.moeru.airicraft.agent.llm.LlmBackendException;
 import ai.moeru.airicraft.agent.session.LanHostingService;
+import ai.moeru.airicraft.agent.tasks.TaskResourceKind;
+import ai.moeru.airicraft.agent.tasks.TaskLedger;
+import ai.moeru.airicraft.agent.tasks.TaskSpec;
+import ai.moeru.airicraft.agent.tasks.TaskType;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.google.gson.JsonObject;
 import com.google.gson.JsonSyntaxException;
 import com.sun.net.httpserver.Headers;
 import com.sun.net.httpserver.HttpExchange;
@@ -54,6 +60,18 @@ public final class ModBridgeServer {
 	private static final long DEBUG_COMPACTION_DEFAULT_TIMEOUT_MILLIS = 30_000L;
 	private static final long DEBUG_COMPACTION_MAX_TIMEOUT_MILLIS = 120_000L;
 	private static final long DEBUG_COMPACTION_POLL_INTERVAL_MILLIS = 25L;
+	private static final long VERIFICATION_RESPAWN_TIMEOUT_MILLIS = 5_000L;
+	private static final long VERIFICATION_RESPAWN_POLL_INTERVAL_MILLIS = 25L;
+	private static final List<String> VERIFICATION_CAPABILITIES = List.of(
+		"player_state",
+		"player_teleport",
+		"player_velocity",
+		"player_respawn",
+		"player_gamemode",
+		"command",
+		"scenario_run",
+		"results"
+	);
 
 	private final HighlightManager highlightManager;
 	private final EmbodiedAgentRuntime agentRuntime;
@@ -103,9 +121,25 @@ public final class ModBridgeServer {
 				httpServer.createContext("/v1/agent/events/recent", exchange -> handleJson(exchange, () -> createRecentAgentEventsResponse(exchange)));
 				httpServer.createContext("/v1/agent/goals", exchange -> handleJson(exchange, this::createAgentGoalsResponse));
 				httpServer.createContext("/v1/agent/tree", exchange -> handleJson(exchange, this::createAgentTreeResponse));
-				httpServer.createContext("/v1/agent/dialogue", exchange -> handleJson(exchange, this::createAgentDialogueResponse));
-				httpServer.createContext("/v1/agent/context", exchange -> handleJson(exchange, this::createAgentContextResponse));
-				httpServer.createContext("/v1/agent/debug/compact", this::handleAgentDebugCompact);
+			httpServer.createContext("/v1/agent/dialogue", exchange -> handleJson(exchange, this::createAgentDialogueResponse));
+			httpServer.createContext("/v1/agent/context", exchange -> handleJson(exchange, this::createAgentContextResponse));
+			httpServer.createContext("/v1/agent/event-policy", exchange -> handleJson(exchange, this::createAgentEventPolicyResponse));
+			httpServer.createContext("/v1/agent/event-policy/clear", this::handleAgentEventPolicyClear);
+			httpServer.createContext("/v1/agent/tasks", this::handleAgentTasks);
+			httpServer.createContext("/v1/agent/ledger", exchange -> handleJson(exchange, this::createAgentLedgerResponse));
+			httpServer.createContext("/v1/agent/evidence", exchange -> handleJson(exchange, this::createAgentEvidenceResponse));
+			httpServer.createContext("/v1/agent/step-execution", exchange -> handleJson(exchange, this::createAgentStepExecutionResponse));
+			httpServer.createContext("/v1/agent/debug/chat", this::handleAgentDebugChat);
+			httpServer.createContext("/v1/agent/debug/compact", this::handleAgentDebugCompact);
+			httpServer.createContext("/v1/agent/debug/state", exchange -> handleJson(exchange, this::createAgentDebugStateResponse));
+			httpServer.createContext("/v1/agent/debug/timeline", exchange -> handleJson(exchange, () -> createAgentDebugTimelineResponse(exchange)));
+				httpServer.createContext("/v1/verification/status", exchange -> handleJson(exchange, this::createVerificationStatusResponse));
+				httpServer.createContext("/v1/verification/player", exchange -> handleJson(exchange, this::createVerificationPlayerResponse));
+				httpServer.createContext("/v1/verification/player/teleport", this::handleVerificationPlayerTeleport);
+				httpServer.createContext("/v1/verification/player/velocity", this::handleVerificationPlayerVelocity);
+				httpServer.createContext("/v1/verification/player/respawn", this::handleVerificationPlayerRespawn);
+				httpServer.createContext("/v1/verification/player/gamemode", this::handleVerificationPlayerGameMode);
+				httpServer.createContext("/v1/verification/command", this::handleVerificationCommand);
 				httpServer.createContext("/v1/verification/results", exchange -> handleJson(exchange, this::createVerificationResultsResponse));
 			httpServer.createContext("/v1/verification/run", this::handleVerificationRun);
 			httpServer.start();
@@ -361,6 +395,94 @@ public final class ModBridgeServer {
 		});
 	}
 
+	private void handleVerificationPlayerTeleport(HttpExchange exchange) throws IOException {
+		handleJsonBody(exchange, "POST", VerificationPlayerTeleportRequest.class, request -> {
+			if (request == null || !isFinite(request.x()) || !isFinite(request.y()) || !isFinite(request.z())) {
+				throw new BridgeUnavailableException("invalid_request", "x, y, and z must be finite numbers");
+			}
+			return onClientThread(() -> verificationPlayerActionResponse(
+				agentRuntime.verificationTeleportPlayer(request.x(), request.y(), request.z()),
+				"teleported",
+				true
+			));
+		});
+	}
+
+	private void handleVerificationPlayerVelocity(HttpExchange exchange) throws IOException {
+		handleJsonBody(exchange, "POST", VerificationPlayerVelocityRequest.class, request -> {
+			if (request == null || !isFinite(request.x()) || !isFinite(request.y()) || !isFinite(request.z())) {
+				throw new BridgeUnavailableException("invalid_request", "x, y, and z must be finite numbers");
+			}
+			return onClientThread(() -> verificationPlayerActionResponse(
+				agentRuntime.verificationSetPlayerVelocity(request.x(), request.y(), request.z()),
+				"applied",
+				true
+			));
+		});
+	}
+
+	private void handleVerificationPlayerGameMode(HttpExchange exchange) throws IOException {
+		handleJsonBody(exchange, "POST", VerificationPlayerGameModeRequest.class, request -> {
+			if (request == null || request.mode() == null || request.mode().isBlank()) {
+				throw new BridgeUnavailableException("invalid_request", "Missing mode");
+			}
+			return onClientThread(() -> verificationPlayerActionResponse(
+				agentRuntime.verificationSetGameMode(request.mode()),
+				"changed",
+				true
+			));
+		});
+	}
+
+	private void handleVerificationPlayerRespawn(HttpExchange exchange) throws IOException {
+		handleJsonBody(exchange, "POST", Object.class, request -> {
+			onClientThread(() -> agentRuntime.verificationRequestRespawn());
+			long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(VERIFICATION_RESPAWN_TIMEOUT_MILLIS);
+			while (System.nanoTime() < deadline) {
+				Map<String, Object> response = onClientThread(() -> {
+					MinecraftClient client = getClient();
+					if (client.currentScreen != null && "DeathScreen".equals(client.currentScreen.getClass().getSimpleName())) {
+						return null;
+					}
+					VerificationPlayerProbe probe = agentRuntime.verificationPlayerProbe();
+					LinkedHashMap<String, Object> payload = verificationPlayerActionResponse(probe, "respawned", true);
+					payload.put("currentScreen", currentScreenName(client));
+					return payload;
+				});
+				if (response != null) {
+					return response;
+				}
+				try {
+					Thread.sleep(VERIFICATION_RESPAWN_POLL_INTERVAL_MILLIS);
+				}
+				catch (InterruptedException exception) {
+					Thread.currentThread().interrupt();
+					throw new BridgeUnavailableException("bridge_interrupted", "Respawn wait interrupted");
+				}
+			}
+			throw new BridgeUnavailableException("verification_unavailable", "Timed out waiting for player respawn");
+		});
+	}
+
+	private void handleVerificationCommand(HttpExchange exchange) throws IOException {
+		handleJsonBody(exchange, "POST", VerificationCommandRequest.class, request -> {
+			if (request == null || request.command() == null || request.command().isBlank()) {
+				throw new BridgeUnavailableException("invalid_request", "Missing command");
+			}
+			return onClientThread(() -> {
+				VerificationPlayerProbe probe = agentRuntime.verificationRunCommand(request.command());
+				LinkedHashMap<String, Object> response = new LinkedHashMap<>();
+				response.put("available", true);
+				response.put("sessionMode", agentRuntime.sessionSnapshot().mode().name());
+				response.put("worldLoaded", agentRuntime.sessionSnapshot().worldLoaded());
+				response.put("executed", true);
+				response.put("command", request.command().trim());
+				response.putAll(verificationPlayerPayload(probe));
+				return response;
+			});
+		});
+	}
+
 	private void handleAgentOpenLan(HttpExchange exchange) throws IOException {
 		handleJsonBody(exchange, "POST", Object.class, request -> {
 			try {
@@ -415,6 +537,129 @@ public final class ModBridgeServer {
 			throw new BridgeUnavailableException("compaction_timeout", "Timed out waiting for planner compaction");
 		});
 	}
+
+	private void handleAgentEventPolicyClear(HttpExchange exchange) throws IOException {
+		handleJsonBody(exchange, "POST", Object.class, request -> {
+			return onClientThread(() -> {
+				agentRuntime.clearEventPolicy();
+				return createAgentEventPolicyPayload();
+			});
+		});
+	}
+
+	private void handleAgentDebugChat(HttpExchange exchange) throws IOException {
+		handleJsonBody(exchange, "POST", DebugChatRequest.class, request -> {
+			if (request == null || request.message() == null || request.message().isBlank()) {
+				throw new BridgeUnavailableException("invalid_request", "Missing message");
+			}
+			return onClientThread(() -> {
+				var client = getClient();
+				ensureWorldLoaded(client);
+				String senderName = nonEmpty(request.senderName(), defaultDebugSender(client));
+				String message = request.message().trim();
+				agentRuntime.onChatReceived(senderName, message);
+
+				Map<String, Object> payload = new LinkedHashMap<>();
+				payload.put("available", true);
+				payload.put("accepted", true);
+				payload.put("senderName", senderName);
+				payload.put("message", message);
+				payload.put("task", agentRuntime.taskSnapshot());
+				payload.put("taskExecution", agentRuntime.taskExecutionSnapshot());
+				payload.put("lastDialogueResponse", agentRuntime.lastDialogueResponse().orElse(null));
+				payload.put("sessionMode", agentRuntime.sessionSnapshot().mode().name());
+				return payload;
+			});
+		});
+	}
+
+
+
+	private void handleAgentTasks(HttpExchange exchange) throws IOException {
+		if (!authorize(exchange)) {
+			writeJson(exchange, 401, Map.of("error", "unauthorized", "message", "Invalid bridge token"));
+			return;
+		}
+		String method = exchange.getRequestMethod();
+		if ("GET".equalsIgnoreCase(method)) {
+			writeJson(exchange, 200, createAgentTasksResponse());
+			return;
+		}
+		if ("DELETE".equalsIgnoreCase(method)) {
+			Map<String, Object> response = onClientThread(() -> {
+				var task = agentRuntime.cancelTask("bridge_debug_cancel");
+				Map<String, Object> payload = new LinkedHashMap<>();
+				payload.put("available", true);
+				payload.put("cancelled", true);
+				payload.put("task", task);
+				payload.put("taskExecution", agentRuntime.taskExecutionSnapshot());
+				payload.put("missionExecution", agentRuntime.missionExecutionSnapshot());
+				return payload;
+			});
+			writeJson(exchange, 200, response);
+			return;
+		}
+		if (!"POST".equalsIgnoreCase(method)) {
+			writeJson(exchange, 405, Map.of("error", "method_not_allowed"));
+			return;
+		}
+		try (InputStreamReader reader = new InputStreamReader(exchange.getRequestBody(), StandardCharsets.UTF_8)) {
+			JsonObject request = GSON.fromJson(reader, JsonObject.class);
+			if (request == null) {
+				throw new BridgeUnavailableException("invalid_request", "Missing task payload");
+			}
+			if (isMissionLedgerRequest(request)) {
+				TaskLedger ledger = GSON.fromJson(request, TaskLedger.class);
+				if (ledger == null || ledger.missionId() == null || ledger.missionType() == null || ledger.steps() == null) {
+					throw new BridgeUnavailableException("invalid_request", "Malformed mission ledger payload");
+				}
+				Map<String, Object> response = onClientThread(() -> {
+					var task = agentRuntime.submitMissionLedger(ledger, "bridge_debug_mission");
+					Map<String, Object> payload = new LinkedHashMap<>();
+					payload.put("available", true);
+					payload.put("task", task);
+					payload.put("taskExecution", agentRuntime.taskExecutionSnapshot());
+					payload.put("missionExecution", agentRuntime.missionExecutionSnapshot());
+					return payload;
+				});
+				writeJson(exchange, 200, response);
+				return;
+			}
+			AgentTaskRequest taskRequest = GSON.fromJson(request, AgentTaskRequest.class);
+			if (taskRequest == null || taskRequest.type() == null || taskRequest.resourceKind() == null || taskRequest.quantity() == null) {
+				throw new BridgeUnavailableException("invalid_request", "Missing task payload");
+			}
+			TaskType taskType = parseTaskType(taskRequest.type());
+			TaskResourceKind resourceKind = parseTaskResourceKind(taskRequest.resourceKind());
+			if (taskRequest.quantity().intValue() <= 0) {
+				throw new BridgeUnavailableException("invalid_request", "quantity must be positive");
+			}
+			Map<String, Object> response = onClientThread(() -> {
+				var task = agentRuntime.submitTask(
+					new TaskSpec(taskType, resourceKind, taskRequest.quantity().intValue()),
+					"bridge_debug"
+				);
+				Map<String, Object> payload = new LinkedHashMap<>();
+				payload.put("available", true);
+				payload.put("task", task);
+				payload.put("taskExecution", agentRuntime.taskExecutionSnapshot());
+				payload.put("missionExecution", agentRuntime.missionExecutionSnapshot());
+				return payload;
+			});
+			writeJson(exchange, 200, response);
+		}
+		catch (JsonSyntaxException exception) {
+			writeJson(exchange, 400, Map.of("error", "invalid_json", "message", "Malformed request payload"));
+		}
+		catch (BridgeUnavailableException exception) {
+			writeJson(exchange, 503, Map.of("error", exception.code(), "message", exception.getMessage()));
+		}
+	}
+
+	private static boolean isMissionLedgerRequest(JsonObject request) {
+		return request.has("missionId") && request.has("missionType") && request.has("steps");
+	}
+
 
 	private void handleJson(HttpExchange exchange, Supplier<Object> supplier) throws IOException {
 		if (!authorize(exchange)) {
@@ -542,10 +787,17 @@ public final class ModBridgeServer {
 			response.put("initialized", snapshot.initialized());
 			response.put("tickCount", snapshot.tickCount());
 			response.put("session", snapshot.session());
+			response.put("task", snapshot.task());
+			response.put("taskExecution", snapshot.taskExecution());
+			response.put("missionExecution", snapshot.missionExecution());
+			response.put("activeJob", agentRuntime.activeJob());
 			response.put("llmAvailable", agentRuntime.llmAvailable());
 			response.put("visionAvailable", agentRuntime.visionAvailable());
 			response.put("plannerVisionMode", plannerSnapshot.plannerVisionMode());
+			response.put("observability", agentRuntime.observabilityDebugSnapshot());
 			response.put("degraded", agentRuntime.isDegraded());
+			response.put("plannerJournal", agentRuntime.plannerShellJournal());
+			response.put("eventPolicy", eventPolicySummaryPayload());
 			response.put("verification", snapshot.verification());
 			return response;
 		});
@@ -557,6 +809,29 @@ public final class ModBridgeServer {
 			response.put("available", true);
 			response.put("scenarios", agentRuntime.verificationScenarioNames());
 			response.put("report", agentRuntime.verificationReport());
+			return response;
+		});
+	}
+
+	private Object createVerificationStatusResponse() {
+		return onClientThread(() -> {
+			Map<String, Object> response = new LinkedHashMap<>();
+			response.put("available", agentRuntime.verificationAvailable());
+			response.put("sessionMode", agentRuntime.sessionSnapshot().mode().name());
+			response.put("worldLoaded", agentRuntime.sessionSnapshot().worldLoaded());
+			response.put("capabilities", VERIFICATION_CAPABILITIES);
+			return response;
+		});
+	}
+
+	private Object createVerificationPlayerResponse() {
+		return onClientThread(() -> {
+			VerificationPlayerProbe probe = agentRuntime.verificationPlayerProbe();
+			LinkedHashMap<String, Object> response = new LinkedHashMap<>();
+			response.put("available", true);
+			response.put("sessionMode", agentRuntime.sessionSnapshot().mode().name());
+			response.put("worldLoaded", agentRuntime.sessionSnapshot().worldLoaded());
+			response.putAll(verificationPlayerPayload(probe));
 			return response;
 		});
 	}
@@ -595,6 +870,10 @@ public final class ModBridgeServer {
 			Map<String, Object> response = new LinkedHashMap<>();
 			response.put("available", true);
 			response.put("activeGoal", agentRuntime.activeGoal().orElse(null));
+			response.put("activeJob", agentRuntime.activeJob());
+			response.put("task", agentRuntime.taskSnapshot());
+			response.put("taskExecution", agentRuntime.taskExecutionSnapshot());
+			response.put("missionExecution", agentRuntime.missionExecutionSnapshot());
 			response.put("lastDialogueResponse", agentRuntime.lastDialogueResponse().orElse(null));
 			return response;
 		});
@@ -614,6 +893,9 @@ public final class ModBridgeServer {
 			Map<String, Object> response = new LinkedHashMap<>();
 			response.put("available", true);
 			response.put("dialogue", agentRuntime.dialogueSnapshot());
+			response.put("conversation", agentRuntime.plannerConversationDebugSnapshot());
+			response.put("canonicalConversation", agentRuntime.plannerCanonicalConversationDebugSnapshot());
+			response.put("plannerJournal", agentRuntime.plannerShellJournal());
 			response.put("lastChatTick", agentRuntime.lastChatTick());
 			response.put("lastChatText", agentRuntime.lastChatText());
 			return response;
@@ -625,8 +907,120 @@ public final class ModBridgeServer {
 			Map<String, Object> response = new LinkedHashMap<>();
 			response.put("available", true);
 			response.put("planner", agentRuntime.plannerDebugSnapshot());
+			response.put("plannerJournal", agentRuntime.plannerShellJournal());
+			response.put("contextExcerpt", agentRuntime.plannerContextExcerpt());
+			response.put("activeJob", agentRuntime.activeJob());
+			response.put("eventPolicy", eventPolicySummaryPayload());
+			response.put("task", agentRuntime.taskSnapshot());
+			response.put("taskExecution", agentRuntime.taskExecutionSnapshot());
+			response.put("missionExecution", agentRuntime.missionExecutionSnapshot());
 			return response;
 		});
+	}
+
+	private Object createAgentDebugStateResponse() {
+		return onClientThread(() -> {
+			Map<String, Object> response = new LinkedHashMap<>();
+			response.put("available", true);
+			response.put("planner", agentRuntime.plannerDebugSnapshot());
+			response.put("dialogueState", agentRuntime.debugDialogueState());
+			response.put("conversation", agentRuntime.plannerConversationDebugSnapshot());
+			response.put("conversationSources", agentRuntime.debugConversationSources());
+			response.put("plannerAttempts", agentRuntime.debugPlannerAttempts());
+			response.put("taskProgressProbe", agentRuntime.debugCollectResourceState());
+			response.put("chatProbe", agentRuntime.debugChatState());
+			response.put("eventPipeline", agentRuntime.debugEventPipelineState());
+			response.put("timelineTail", agentRuntime.debugTimeline(null).entries());
+			return response;
+		});
+	}
+
+	private Object createAgentDebugTimelineResponse(HttpExchange exchange) {
+		long defaultSince = Long.MIN_VALUE;
+		long since = getLongQuery(exchange, "since", defaultSince);
+		Long sinceEntryId = since == defaultSince ? null : since;
+		return onClientThread(() -> {
+			var result = agentRuntime.debugTimeline(sinceEntryId);
+			Map<String, Object> response = new LinkedHashMap<>();
+			response.put("available", true);
+			response.put("oldestEntryId", result.oldestEntryId());
+			response.put("latestEntryId", result.latestEntryId());
+			response.put("truncated", result.truncated());
+			response.put("entries", result.entries());
+			return response;
+		});
+	}
+
+	private Object createAgentTasksResponse() {
+		return onClientThread(() -> {
+			Map<String, Object> response = new LinkedHashMap<>();
+			response.put("available", true);
+			response.put("activeJob", agentRuntime.activeJob());
+			response.put("task", agentRuntime.taskSnapshot());
+			response.put("taskExecution", agentRuntime.taskExecutionSnapshot());
+			response.put("missionExecution", agentRuntime.missionExecutionSnapshot());
+			return response;
+		});
+	}
+
+	private Object createAgentLedgerResponse() {
+		return onClientThread(() -> {
+			Map<String, Object> response = new LinkedHashMap<>();
+			response.put("available", true);
+			response.put("activeJob", agentRuntime.activeJob());
+			response.put("mission", agentRuntime.taskSnapshot().mission());
+			response.put("ledger", agentRuntime.missionExecutionSnapshot().ledger());
+			response.put("lastStepResult", agentRuntime.missionExecutionSnapshot().lastStepResult());
+			return response;
+		});
+	}
+
+	private Object createAgentEvidenceResponse() {
+		return onClientThread(() -> {
+			Map<String, Object> response = new LinkedHashMap<>();
+			response.put("available", true);
+			response.put("activeJob", agentRuntime.activeJob());
+			response.put("evidence", agentRuntime.missionExecutionSnapshot().evidence());
+			response.put("task", agentRuntime.taskSnapshot());
+			return response;
+		});
+	}
+
+	private Object createAgentStepExecutionResponse() {
+		return onClientThread(() -> {
+			Map<String, Object> response = new LinkedHashMap<>();
+			response.put("available", true);
+			response.put("activeJob", agentRuntime.activeJob());
+			response.put("stepExecution", agentRuntime.missionExecutionSnapshot().lastStepResult());
+			response.put("taskExecution", agentRuntime.taskExecutionSnapshot());
+			return response;
+		});
+	}
+
+	private Object createAgentEventPolicyResponse() {
+		return onClientThread(this::createAgentEventPolicyPayload);
+	}
+
+	private Map<String, Object> createAgentEventPolicyPayload() {
+		LinkedHashMap<String, Object> response = new LinkedHashMap<>();
+		response.put("available", true);
+		response.put("activeRuleCount", agentRuntime.activeEventPolicyRuleCount());
+		response.put("recentInterventionCount", agentRuntime.recentEventPolicyInterventionCount());
+		response.put("lastDecision", agentRuntime.lastEventPolicyDecision());
+		response.put("activeRules", agentRuntime.activeEventPolicyRules());
+		response.put("recentInterventions", agentRuntime.recentEventPolicyInterventions());
+		return response;
+	}
+
+	private Map<String, Object> eventPolicySummaryPayload() {
+		LinkedHashMap<String, Object> payload = new LinkedHashMap<>();
+		payload.put("activeRuleCount", agentRuntime.activeEventPolicyRuleCount());
+		payload.put("recentInterventionCount", agentRuntime.recentEventPolicyInterventionCount());
+		if (agentRuntime.lastEventPolicyDecision() != null) {
+			payload.put("lastMatchedRuleId", agentRuntime.lastEventPolicyDecision().matchedRuleId());
+			payload.put("lastMatchedEffect", agentRuntime.lastEventPolicyDecision().effect().name());
+		}
+		return payload;
 	}
 
 	private Object createFocusResponse() {
@@ -850,6 +1244,7 @@ public final class ModBridgeServer {
 		response.put("completed", completed);
 		response.put("timeoutMs", timeoutMillis);
 		response.put("planner", agentRuntime.plannerDebugSnapshot());
+		response.put("plannerJournal", agentRuntime.plannerShellJournal());
 		return response;
 	}
 
@@ -987,6 +1382,24 @@ public final class ModBridgeServer {
 		}
 	}
 
+	private static TaskType parseTaskType(String value) {
+		try {
+			return TaskType.valueOf(value.trim().toUpperCase(java.util.Locale.ROOT));
+		}
+		catch (RuntimeException exception) {
+			throw new BridgeUnavailableException("invalid_request", "Unknown task type: " + value);
+		}
+	}
+
+	private static TaskResourceKind parseTaskResourceKind(String value) {
+		try {
+			return TaskResourceKind.valueOf(value.trim().toUpperCase(java.util.Locale.ROOT));
+		}
+		catch (RuntimeException exception) {
+			throw new BridgeUnavailableException("invalid_request", "Unknown task resource kind: " + value);
+		}
+	}
+
 	private static String generateToken() {
 		byte[] bytes = new byte[24];
 		RANDOM.nextBytes(bytes);
@@ -1039,8 +1452,36 @@ public final class ModBridgeServer {
 		throw new BridgeUnavailableException("invalid_request", "kind must be block or region");
 	}
 
+	private LinkedHashMap<String, Object> verificationPlayerActionResponse(
+		VerificationPlayerProbe probe,
+		String resultKey,
+		boolean resultValue
+	) {
+		LinkedHashMap<String, Object> response = new LinkedHashMap<>();
+		response.put("available", true);
+		response.put("sessionMode", agentRuntime.sessionSnapshot().mode().name());
+		response.put("worldLoaded", agentRuntime.sessionSnapshot().worldLoaded());
+		response.put(resultKey, resultValue);
+		response.putAll(verificationPlayerPayload(probe));
+		return response;
+	}
+
+	private static Map<String, Object> verificationPlayerPayload(VerificationPlayerProbe probe) {
+		return probe == null ? Map.of() : probe.asMap();
+	}
+
 	private static boolean isFinite(Double value) {
 		return value != null && Double.isFinite(value);
+	}
+
+	private static String defaultDebugSender(MinecraftClient client) {
+		if (client != null && client.player != null && client.player.getName() != null) {
+			return client.player.getName().getString();
+		}
+		if (client != null && client.getSession() != null && client.getSession().getUsername() != null) {
+			return client.getSession().getUsername();
+		}
+		throw new BridgeUnavailableException("minecraft_unavailable", "Minecraft session is not initialized");
 	}
 
 	private static BlockPos requiredBlockPos(Integer x, Integer y, Integer z, String fields) {
@@ -1079,7 +1520,25 @@ public final class ModBridgeServer {
 	private record VerificationRunRequest(String scenario) {
 	}
 
+	private record VerificationPlayerTeleportRequest(Double x, Double y, Double z) {
+	}
+
+	private record VerificationPlayerVelocityRequest(Double x, Double y, Double z) {
+	}
+
+	private record VerificationPlayerGameModeRequest(String mode) {
+	}
+
+	private record VerificationCommandRequest(String command) {
+	}
+
 	private record VisionDescribeRequest(String prompt) {
+	}
+
+	private record AgentTaskRequest(String type, String resourceKind, Integer quantity) {
+	}
+
+	private record DebugChatRequest(String senderName, String message) {
 	}
 
 	private static final class DebugCompactRequest {

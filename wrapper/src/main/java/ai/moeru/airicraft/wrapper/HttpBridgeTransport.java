@@ -200,8 +200,48 @@ final class HttpBridgeTransport implements MinecraftTransport {
 	}
 
 	@Override
+	public Map<String, Object> openAgentSessionLan() {
+		return send("POST", "/v1/agent/session/open-lan", null);
+	}
+
+	@Override
 	public Map<String, Object> getAgentGoals() {
 		return get("/v1/agent/goals");
+	}
+
+	@Override
+	public Map<String, Object> getAgentTasks() {
+		return get("/v1/agent/tasks");
+	}
+
+	@Override
+	public Map<String, Object> getAgentLedger() {
+		return get("/v1/agent/ledger");
+	}
+
+	@Override
+	public Map<String, Object> getAgentEvidence() {
+		return get("/v1/agent/evidence");
+	}
+
+	@Override
+	public Map<String, Object> getAgentStepExecution() {
+		return get("/v1/agent/step-execution");
+	}
+
+	@Override
+	public Map<String, Object> submitAgentTask(Map<String, Object> taskPayload) {
+		return send("POST", "/v1/agent/tasks", taskPayload);
+	}
+
+	@Override
+	public Map<String, Object> submitAgentMission(Map<String, Object> missionPayload) {
+		return send("POST", "/v1/agent/tasks", missionPayload);
+	}
+
+	@Override
+	public Map<String, Object> cancelAgentTask() {
+		return send("DELETE", "/v1/agent/tasks", null);
 	}
 
 	@Override
@@ -212,6 +252,24 @@ final class HttpBridgeTransport implements MinecraftTransport {
 	@Override
 	public Map<String, Object> getAgentDialogue() {
 		return get("/v1/agent/dialogue");
+	}
+
+	@Override
+	public Map<String, Object> getAgentDebugState() {
+		return get("/v1/agent/debug/state");
+	}
+
+	@Override
+	public Map<String, Object> listAgentDebugTimeline(Long sinceEntryId) {
+		if (sinceEntryId == null) {
+			return get("/v1/agent/debug/timeline");
+		}
+		return get("/v1/agent/debug/timeline?since=" + sinceEntryId.longValue());
+	}
+
+	@Override
+	public Map<String, Object> sendAgentDebugChat(String message) {
+		return send("POST", "/v1/agent/debug/chat", Map.of("message", message));
 	}
 
 	@Override
@@ -235,6 +293,69 @@ final class HttpBridgeTransport implements MinecraftTransport {
 			body.put("timeoutMs", timeoutMs);
 		}
 		return send("POST", "/v1/agent/debug/compact", body);
+	}
+
+	@Override
+	public Map<String, Object> getAgentEventPolicy() {
+		return get("/v1/agent/event-policy");
+	}
+
+	@Override
+	public Map<String, Object> clearAgentEventPolicy() {
+		return send("POST", "/v1/agent/event-policy/clear", null);
+	}
+
+	@Override
+	public Map<String, Object> getVerificationStatus() {
+		return get("/v1/verification/status");
+	}
+
+	@Override
+	public Map<String, Object> getVerificationPlayerState() {
+		return get("/v1/verification/player");
+	}
+
+	@Override
+	public Map<String, Object> teleportVerificationPlayer(double x, double y, double z) {
+		return send("POST", "/v1/verification/player/teleport", Map.of(
+			"x", x,
+			"y", y,
+			"z", z
+		));
+	}
+
+	@Override
+	public Map<String, Object> setVerificationPlayerVelocity(double x, double y, double z) {
+		return send("POST", "/v1/verification/player/velocity", Map.of(
+			"x", x,
+			"y", y,
+			"z", z
+		));
+	}
+
+	@Override
+	public Map<String, Object> respawnVerificationPlayer() {
+		return send("POST", "/v1/verification/player/respawn", null);
+	}
+
+	@Override
+	public Map<String, Object> setVerificationPlayerGameMode(String mode) {
+		return send("POST", "/v1/verification/player/gamemode", Map.of("mode", mode));
+	}
+
+	@Override
+	public Map<String, Object> runVerificationCommand(String command) {
+		return send("POST", "/v1/verification/command", Map.of("command", command));
+	}
+
+	@Override
+	public Map<String, Object> runVerificationScenario(String scenario) {
+		return send("POST", "/v1/verification/run", Map.of("scenario", scenario));
+	}
+
+	@Override
+	public Map<String, Object> getVerificationResults() {
+		return get("/v1/verification/results");
 	}
 
 	private Map<String, Object> get(String path) {

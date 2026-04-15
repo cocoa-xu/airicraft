@@ -3,12 +3,15 @@ package ai.moeru.airicraft.agent.behavior;
 import ai.moeru.airicraft.agent.control.LookController;
 import ai.moeru.airicraft.agent.control.MovementController;
 import ai.moeru.airicraft.agent.chat.ChatService;
+import ai.moeru.airicraft.agent.debug.AgentDebugRecorder;
 import ai.moeru.airicraft.agent.dialogue.DialogueResponse;
 import ai.moeru.airicraft.agent.follow.FollowState;
 import ai.moeru.airicraft.agent.goals.GoalSnapshot;
 import ai.moeru.airicraft.agent.goals.GoalType;
 import ai.moeru.airicraft.agent.session.SessionSnapshot;
 import ai.moeru.airicraft.agent.dialogue.DialogueRuntime;
+import ai.moeru.airicraft.agent.tasks.TaskExecutionSnapshot;
+import ai.moeru.airicraft.agent.tasks.TaskExecutionState;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.util.math.Vec3d;
 
@@ -30,8 +33,10 @@ public final class BehaviorTreeRuntime {
 		SessionSnapshot sessionSnapshot,
 		DialogueRuntime dialogueRuntime,
 		ChatService chatService,
+		AgentDebugRecorder debugRecorder,
 		Optional<GoalSnapshot> activeGoal,
 		FollowState followState,
+		TaskExecutionSnapshot taskExecutionSnapshot,
 		long tick
 	) {
 		if (client == null || !sessionSnapshot.worldLoaded() || client.player == null) {
@@ -42,62 +47,39 @@ public final class BehaviorTreeRuntime {
 
 		if (dialogueRuntime.hasPendingReply()) {
 			movementController.stop(client);
+			String source = dialogueRuntime.pendingReplyReason();
+			boolean reusedPriorResponse = "failure_reused_last_response".equals(source);
 			dialogueRuntime.lastResponse()
 				.map(DialogueResponse::text)
-				.filter(text -> chatService.send(client, text, tick))
-				.ifPresent(ignored -> dialogueRuntime.markReplyObserved());
+				.ifPresent(text -> {
+					debugRecorder.recordChatAttempt(tick, text, source, reusedPriorResponse);
+					boolean sent = chatService.send(client, text, tick);
+					debugRecorder.recordChatResult(tick, text, source, reusedPriorResponse, sent);
+					if (sent) {
+						dialogueRuntime.markReplyObserved();
+						debugRecorder.recordDialogueState(dialogueRuntime.snapshot());
+					}
+				});
 			snapshot = new BehaviorTreeSnapshot(NodeStatus.RUNNING, List.of("Root", "ReplyToPlayer"), movementController.snapshot());
 			return;
 		}
 
-		if (activeGoal.isPresent() && activeGoal.get().type() == GoalType.FOLLOW_PLAYER) {
-			if (!sessionSnapshot.companionActuationAllowed()) {
-				movementController.stop(client);
-				snapshot = new BehaviorTreeSnapshot(
-					NodeStatus.RUNNING,
-					List.of("Root", "FollowPlayerSubtree", "ActuationBlockedBySession"),
-					movementController.snapshot()
-				);
-				return;
-			}
-
-			if (followState.targetNearby()) {
-				Vec3d targetPos = new Vec3d(followState.targetX(), followState.targetY() + 1.62D, followState.targetZ());
-				lookController.lookAt(client, targetPos, LOOK_YAW_STEP, LOOK_PITCH_STEP);
-				if (followState.distanceToTarget() > FOLLOW_STOP_DISTANCE) {
-					boolean jumpToUnstick = movementController.snapshot().stuck();
-					movementController.moveForward(client, true, jumpToUnstick, tick);
-					var movementSnapshot = movementController.snapshot();
-					snapshot = new BehaviorTreeSnapshot(
-						NodeStatus.RUNNING,
-						movementSnapshot.stuck()
-							? List.of("Root", "FollowPlayerSubtree", "MoveCloserWhenStuck")
-							: List.of("Root", "FollowPlayerSubtree", "MoveCloserWhenTooFar"),
-						movementSnapshot
-					);
-					return;
-				}
-
-				movementController.stop(client);
-				snapshot = new BehaviorTreeSnapshot(
-					NodeStatus.RUNNING,
-					List.of("Root", "FollowPlayerSubtree", "ObserveAndWait"),
-					movementController.snapshot()
-				);
-				return;
-			}
-
-			movementController.stop(client);
-			snapshot = new BehaviorTreeSnapshot(
-				NodeStatus.RUNNING,
-				List.of("Root", "FollowPlayerSubtree", "ObserveAndWait"),
-				movementController.snapshot()
-			);
+		movementController.stop(client);
+		if (activeGoal.isEmpty() || taskExecutionSnapshot == null || taskExecutionSnapshot.state() == TaskExecutionState.IDLE) {
+			snapshot = new BehaviorTreeSnapshot(NodeStatus.RUNNING, List.of("Root", "ObserveAndWait"), movementController.snapshot());
 			return;
 		}
 
-		movementController.stop(client);
-		snapshot = new BehaviorTreeSnapshot(NodeStatus.RUNNING, List.of("Root", "ObserveAndWait"), movementController.snapshot());
+		if (activeGoal.get().type() == GoalType.FOLLOW_PLAYER && followState.targetNearby()) {
+			Vec3d targetPos = new Vec3d(followState.targetX(), followState.targetY() + 1.62D, followState.targetZ());
+			lookController.lookAt(client, targetPos, LOOK_YAW_STEP, LOOK_PITCH_STEP);
+		}
+
+		snapshot = new BehaviorTreeSnapshot(
+			NodeStatus.RUNNING,
+			nodePathFor(activeGoal.get(), followState, taskExecutionSnapshot.state()),
+			movementController.snapshot()
+		);
 	}
 
 	public BehaviorTreeSnapshot snapshot() {
@@ -107,5 +89,28 @@ public final class BehaviorTreeRuntime {
 	public void stop(MinecraftClient client) {
 		movementController.stop(client);
 		snapshot = BehaviorTreeSnapshot.idle();
+	}
+
+	private static List<String> nodePathFor(GoalSnapshot activeGoal, FollowState followState, TaskExecutionState taskState) {
+		String subtree = switch (activeGoal.type()) {
+			case FOLLOW_PLAYER -> "FollowPlayerSubtree";
+			case NAVIGATE_TO -> "NavigateToSubtree";
+			case MINE_BLOCKS -> "MineBlocksSubtree";
+		};
+		return switch (taskState) {
+			case PAUSED_BY_SESSION_GATE -> List.of("Root", subtree, "ActuationBlockedBySession");
+			case RUNNING -> runningPathFor(activeGoal, followState, subtree);
+			case COMPLETED -> List.of("Root", subtree, "TaskCompleted");
+			case FAILED -> List.of("Root", subtree, "TaskFailed");
+			case CANCELLED -> List.of("Root", subtree, "TaskCancelled");
+			case IDLE -> List.of("Root", "ObserveAndWait");
+		};
+	}
+
+	private static List<String> runningPathFor(GoalSnapshot activeGoal, FollowState followState, String subtree) {
+		if (activeGoal.type() == GoalType.FOLLOW_PLAYER && followState.targetNearby() && followState.distanceToTarget() > FOLLOW_STOP_DISTANCE) {
+			return List.of("Root", subtree, "MoveCloserWhenTooFar");
+		}
+		return List.of("Root", subtree, "ObserveAndWait");
 	}
 }

@@ -2,50 +2,35 @@ package ai.moeru.airicraft.agent.dialogue;
 
 import ai.moeru.airicraft.agent.events.SemanticEventBuffer;
 import ai.moeru.airicraft.agent.goals.GoalSnapshot;
-import ai.moeru.airicraft.agent.llm.CurrentViewVisionTool;
 import ai.moeru.airicraft.agent.llm.CompactionExecutionResult;
 import ai.moeru.airicraft.agent.llm.LlmFailureType;
-import ai.moeru.airicraft.agent.llm.OpenAiCompatibleChatClient;
-import ai.moeru.airicraft.agent.llm.OpenAiCompatibleLlmBackend;
-import ai.moeru.airicraft.agent.llm.PlannerContextAggregator;
+import ai.moeru.airicraft.agent.llm.PlannerConversationDebugSnapshot;
 import ai.moeru.airicraft.agent.llm.PlannerExecutionResult;
-import ai.moeru.airicraft.agent.llm.PlannerExecutor;
-import ai.moeru.airicraft.agent.llm.PlannerCompactionService;
-import ai.moeru.airicraft.agent.llm.PlannerOrchestratorDebugSnapshot;
 import ai.moeru.airicraft.agent.llm.PlannerOrchestrator;
+import ai.moeru.airicraft.agent.llm.PlannerOrchestratorDebugSnapshot;
 import ai.moeru.airicraft.agent.llm.PlannerRequest;
+import ai.moeru.airicraft.agent.llm.PlannerRequestSeed;
 import ai.moeru.airicraft.agent.llm.PlannerResponse;
+import ai.moeru.airicraft.agent.llm.PlannerTrigger;
+import ai.moeru.airicraft.agent.llm.PlannerTriggerType;
 import ai.moeru.airicraft.agent.session.SessionSnapshot;
+import ai.moeru.airicraft.agent.tasks.MissionExecutionSnapshot;
+import ai.moeru.airicraft.agent.tasks.TaskSnapshot;
 
 import java.time.Clock;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 
 public final class DialogueRuntime {
-	private static final int DEGRADED_FAILURE_THRESHOLD = 3;
-	private static final String RESET_COMMAND = "@agent reset";
-	private static final String DEGRADED_MESSAGE = "I'm having trouble understanding right now. Send '@agent reset' to recover my planner.";
-	private static final String RESET_MESSAGE = "Planner state reset.";
-	private static final String PARSE_ERROR_MESSAGE = "I got confused for a moment.";
-
 	private final PlannerOrchestrator plannerOrchestrator;
 	private final Clock clock;
 	private final int maxRecentTurns;
 	private final List<DialogueTurn> recentTurns = new ArrayList<>();
 
-	private DialogueResponse lastResponse;
-	private boolean pendingReply;
-	private boolean degraded;
-	private int consecutiveFailureCount;
+	private DialogueState state = DialogueCore.initialState();
 	private int queuedTimeoutInjections;
-	private LlmFailureType lastFailureType;
-	private long lastFailureTick = -1L;
-
-	public DialogueRuntime() {
-		this(defaultOrchestrator(ai.moeru.airicraft.agent.AgentConfig.LlmConfig.defaults(), Clock.systemDefaultZone()), 8, Clock.systemDefaultZone());
-	}
+	private boolean pendingTimeoutVisibleReply;
 
 	public DialogueRuntime(PlannerOrchestrator plannerOrchestrator, int maxRecentTurns) {
 		this(plannerOrchestrator, maxRecentTurns, Clock.systemDefaultZone());
@@ -57,44 +42,24 @@ public final class DialogueRuntime {
 		this.maxRecentTurns = Math.max(1, maxRecentTurns);
 	}
 
-	public DialogueRuntime(PlannerExecutor plannerExecutor, int maxRecentTurns) {
-		this(
-			new PlannerOrchestrator(
-				plannerExecutor,
-				new PlannerCompactionService(new OpenAiCompatibleChatClient(ai.moeru.airicraft.agent.AgentConfig.LlmConfig.defaults())),
-				new PlannerContextAggregator(
-					Clock.systemDefaultZone(),
-					ai.moeru.airicraft.agent.AgentConfig.LlmConfig.defaults().plannerCompactionTriggerTokens(),
-					ai.moeru.airicraft.agent.AgentConfig.LlmConfig.defaults().plannerVisionMode()
-				),
-				CurrentViewVisionTool.disabled(),
-				ai.moeru.airicraft.agent.AgentConfig.LlmConfig.defaults().plannerVisionMode(),
-				ai.moeru.airicraft.agent.AgentConfig.LlmConfig.defaults().visionImageDetail()
-			),
-			maxRecentTurns,
-			Clock.systemDefaultZone()
-		);
-	}
-
-	public void recordResponse(DialogueResponse response) {
-		lastResponse = response;
-		pendingReply = response != null && response.text() != null && !response.text().isBlank();
-	}
-
 	public Optional<DialogueResponse> lastResponse() {
-		return Optional.ofNullable(lastResponse);
+		return Optional.ofNullable(state.lastResponse());
 	}
 
 	public boolean hasPendingReply() {
-		return pendingReply;
+		return state.pendingReply();
+	}
+
+	public String pendingReplyReason() {
+		return state.pendingReplyReason();
 	}
 
 	public void markReplyObserved() {
-		pendingReply = false;
+		state = DialogueCore.markReplyObserved(state);
 	}
 
 	public boolean isDegraded() {
-		return degraded;
+		return state.degraded();
 	}
 
 	public boolean llmAvailable() {
@@ -103,6 +68,18 @@ public final class DialogueRuntime {
 
 	public PlannerOrchestratorDebugSnapshot plannerDebugSnapshot() {
 		return plannerOrchestrator.debugSnapshot();
+	}
+
+	public PlannerConversationDebugSnapshot plannerConversationDebugSnapshot() {
+		return plannerOrchestrator.conversationDebugSnapshot();
+	}
+
+	public PlannerConversationDebugSnapshot plannerCanonicalConversationDebugSnapshot() {
+		return plannerOrchestrator.canonicalConversationDebugSnapshot();
+	}
+
+	public List<String> plannerContextExcerpt() {
+		return plannerOrchestrator.contextExcerpt();
 	}
 
 	public boolean startDebugCompaction() {
@@ -114,25 +91,27 @@ public final class DialogueRuntime {
 	}
 
 	public long lastFailureTick() {
-		return lastFailureTick;
+		return state.lastFailureTick();
 	}
 
 	public int consecutiveFailureCount() {
-		return consecutiveFailureCount;
+		return state.consecutiveFailureCount();
 	}
 
 	public LlmFailureType lastFailureType() {
-		return lastFailureType;
+		return state.lastFailureType();
 	}
 
 	public DialogueSnapshot snapshot() {
 		return new DialogueSnapshot(
 			List.copyOf(recentTurns),
-			lastResponse,
-			degraded,
-			consecutiveFailureCount,
-			lastFailureType,
-			lastFailureTick
+			state.lastResponse(),
+			state.pendingReply(),
+			state.pendingReplyReason(),
+			state.degraded(),
+			state.consecutiveFailureCount(),
+			state.lastFailureType(),
+			state.lastFailureTick()
 		);
 	}
 
@@ -145,22 +124,105 @@ public final class DialogueRuntime {
 	}
 
 	public boolean handleResetCommand(String senderName, String plainTextMessage, long tick, SemanticEventBuffer eventBuffer) {
-		if (!isResetCommand(plainTextMessage)) {
+		if (!DialogueCore.isResetCommand(plainTextMessage)) {
 			return false;
 		}
 
 		appendTurn(new DialogueTurn(senderName, plainTextMessage, tick, clock.millis()));
-		eventBuffer.append(tick, "planner.reset_requested", Map.of(
-			"player", senderName
-		));
-		resetLlmState(tick, eventBuffer);
-		recordResponse(new DialogueResponse(
-			RESET_MESSAGE,
-			new DialogueIntent(DialogueIntentType.ACKNOWLEDGE_FAILURE, null, senderName),
-			tick
-		));
-		appendTurn(new DialogueTurn(DialogueSpeakerLabels.AGENT, RESET_MESSAGE, tick, clock.millis()));
+		plannerOrchestrator.reset();
+		queuedTimeoutInjections = 0;
+		applyTransition(DialogueCore.onReset(state, senderName, tick), tick, eventBuffer);
 		return true;
+	}
+
+	public void onPlayerChat(
+		String senderName,
+		String plainTextMessage,
+		long tick,
+		SessionSnapshot sessionSnapshot,
+		String primaryInteractionPlayer,
+		Optional<GoalSnapshot> activeGoal,
+		TaskSnapshot activeTask,
+		MissionExecutionSnapshot missionExecution,
+		SemanticEventBuffer eventBuffer
+	) {
+		long timestampMs = clock.millis();
+		appendTurn(new DialogueTurn(senderName, plainTextMessage, tick, timestampMs));
+		submitPlannerTrigger(
+			PlannerRequest.ofTrigger(
+				tick,
+				timestampMs,
+				sessionSnapshot.mode(),
+				primaryInteractionPlayer,
+				activeGoal.orElse(null),
+				PlannerTriggerType.CHAT,
+				senderName,
+				plainTextMessage,
+				null
+			),
+			eventBuffer,
+			timestampMs,
+			true
+		);
+	}
+
+	public void onContextTrigger(
+		PlannerTriggerType triggerType,
+		String senderName,
+		String plainTextMessage,
+		long tick,
+		SessionSnapshot sessionSnapshot,
+		String primaryInteractionPlayer,
+		Optional<GoalSnapshot> activeGoal,
+		SemanticEventBuffer eventBuffer
+	) {
+		long timestampMs = clock.millis();
+		submitPlannerTrigger(
+			PlannerRequest.ofTrigger(
+				tick,
+				timestampMs,
+				sessionSnapshot.mode(),
+				primaryInteractionPlayer,
+				activeGoal.orElse(null),
+				triggerType,
+				senderName,
+				plainTextMessage,
+				null
+			),
+			eventBuffer,
+			timestampMs,
+			triggerType == PlannerTriggerType.CHAT && senderName != null && !"system".equalsIgnoreCase(senderName)
+		);
+	}
+
+	public void onPlannerTrigger(
+		PlannerTrigger trigger,
+		SessionSnapshot sessionSnapshot,
+		String primaryInteractionPlayer,
+		Optional<GoalSnapshot> activeGoal,
+		SemanticEventBuffer plannerEventBuffer
+	) {
+		if (trigger == null) {
+			return;
+		}
+		submitPlannerTrigger(
+			PlannerRequest.ofTrigger(
+				trigger.tick(),
+				trigger.timestampMs(),
+				sessionSnapshot.mode(),
+				primaryInteractionPlayer,
+				activeGoal.orElse(null),
+				trigger.type(),
+				trigger.speaker(),
+				trigger.text(),
+				null
+			),
+			plannerEventBuffer,
+			trigger.timestampMs(),
+			trigger.type() == PlannerTriggerType.CHAT
+				&& trigger.speaker() != null
+				&& !"system".equalsIgnoreCase(trigger.speaker())
+		);
 	}
 
 	public void onPlayerChat(
@@ -172,29 +234,54 @@ public final class DialogueRuntime {
 		Optional<GoalSnapshot> activeGoal,
 		SemanticEventBuffer eventBuffer
 	) {
+		onPlayerChat(senderName, plainTextMessage, tick, sessionSnapshot, primaryInteractionPlayer, activeGoal, null, null, eventBuffer);
+	}
+
+	public void onInternalTaskUpdate(
+		String updateMessage,
+		long tick,
+		SessionSnapshot sessionSnapshot,
+		Optional<GoalSnapshot> activeGoal,
+		TaskSnapshot activeTask,
+		MissionExecutionSnapshot missionExecution,
+		SemanticEventBuffer eventBuffer
+	) {
 		long timestampMs = clock.millis();
-		appendTurn(new DialogueTurn(senderName, plainTextMessage, tick, timestampMs));
-		if (degraded || plannerOrchestrator.hasInFlight()) {
+		appendTurn(new DialogueTurn("system", updateMessage, tick, timestampMs));
+		if (state.degraded() || plannerOrchestrator.hasInFlight() || !plannerOrchestrator.isConfigured()) {
 			return;
 		}
-		plannerOrchestrator.recordEvents(eventBuffer.query(null).events(), timestampMs);
-
+		plannerOrchestrator.recordEvents(eventBuffer.query(null), timestampMs);
 		plannerOrchestrator.submit(new PlannerRequest(
 			tick,
 			timestampMs,
 			sessionSnapshot.mode(),
-			primaryInteractionPlayer,
+			null,
 			activeGoal.orElse(null),
-			senderName,
-			plainTextMessage,
+			activeTask,
+			missionExecution,
+			"system",
+			updateMessage,
 			null
 		));
+		pendingTimeoutVisibleReply = false;
+	}
+
+	public void onInternalTaskUpdate(
+		String updateMessage,
+		long tick,
+		SessionSnapshot sessionSnapshot,
+		Optional<GoalSnapshot> activeGoal,
+		SemanticEventBuffer eventBuffer
+	) {
+		onInternalTaskUpdate(updateMessage, tick, sessionSnapshot, activeGoal, null, null, eventBuffer);
 	}
 
 	public DialogueResponse poll(long tick, SemanticEventBuffer eventBuffer) {
 		if (queuedTimeoutInjections > 0 && !plannerOrchestrator.hasInFlight()) {
 			queuedTimeoutInjections--;
-			onFailure(LlmFailureType.TIMEOUT, "Injected LLM timeout", tick, eventBuffer);
+			applyTransition(DialogueCore.onPlannerFailure(state, LlmFailureType.TIMEOUT, "Injected LLM timeout", pendingTimeoutVisibleReply, tick), tick, eventBuffer);
+			pendingTimeoutVisibleReply = false;
 			return null;
 		}
 
@@ -204,106 +291,81 @@ public final class DialogueRuntime {
 		}
 
 		if (!result.succeeded()) {
-			onFailure(result.failureType(), result.failureMessage(), tick, eventBuffer);
+			boolean timeoutVisibleReply = pendingTimeoutVisibleReply || isDirectChatRequest(result.request());
+			applyTransition(
+				DialogueCore.onPlannerFailure(
+					state,
+					result.failureType(),
+					result.failureMessage(),
+					timeoutVisibleReply,
+					tick
+				),
+				tick,
+				eventBuffer
+			);
+			pendingTimeoutVisibleReply = false;
 			return null;
 		}
 
-		consecutiveFailureCount = 0;
-		PlannerResponse plannerResponse = result.response();
-		DialogueIntentType mappedIntentType = DialogueIntentType.fromWire(plannerResponse.intent().type()).orElse(null);
-		if (mappedIntentType == null) {
-			eventBuffer.append(tick, "planner.unknown_intent", Map.of(
-				"type", plannerResponse.intent().type()
-			));
-			mappedIntentType = DialogueIntentType.NONE;
-		}
-
-		DialogueResponse response = new DialogueResponse(
-			plannerResponse.replyText() == null ? "" : plannerResponse.replyText(),
-			new DialogueIntent(mappedIntentType, plannerResponse.intent().goalType(), plannerResponse.intent().targetPlayer()),
-			tick
-		);
-		recordResponse(response);
-		if (response.text() != null && !response.text().isBlank()) {
-			recordAgentTurn(response.text(), tick);
-		}
-		return response;
+		DialogueTransition transition = DialogueCore.onPlannerSuccess(state, result.response(), tick);
+		applyTransition(transition, tick, eventBuffer);
+		pendingTimeoutVisibleReply = false;
+		plannerOrchestrator.onAcceptedReplyRecorded();
+		return transition.lastVisibleResponse();
 	}
 
 	public void resetLlmState(long tick, SemanticEventBuffer eventBuffer) {
-		boolean wasDegraded = degraded;
 		plannerOrchestrator.reset();
-		degraded = false;
-		consecutiveFailureCount = 0;
 		queuedTimeoutInjections = 0;
-		lastFailureType = null;
-		lastFailureTick = -1L;
-		if (wasDegraded) {
-			eventBuffer.append(tick, "planner.degraded_cleared", Map.of());
+		pendingTimeoutVisibleReply = false;
+		if (state.degraded()) {
+			applyEffects(List.of(DialogueEffect.appendSemanticEvent("planner.degraded_cleared", java.util.Map.of())), tick, eventBuffer);
 		}
+		state = DialogueCore.initialState();
 	}
 
 	public void clear() {
-		lastResponse = null;
-		pendingReply = false;
-		degraded = false;
-		consecutiveFailureCount = 0;
+		state = DialogueCore.initialState();
 		queuedTimeoutInjections = 0;
-		lastFailureType = null;
-		lastFailureTick = -1L;
+		pendingTimeoutVisibleReply = false;
 		recentTurns.clear();
 		plannerOrchestrator.reset();
 	}
 
 	public void shutdown() {
-		clear();
+		state = DialogueCore.initialState();
+		queuedTimeoutInjections = 0;
+		pendingTimeoutVisibleReply = false;
+		recentTurns.clear();
 		plannerOrchestrator.shutdown();
 	}
 
 	public static boolean isResetCommand(String plainTextMessage) {
-		if (plainTextMessage == null) {
-			return false;
-		}
-		return plainTextMessage.stripLeading().equalsIgnoreCase(RESET_COMMAND);
+		return DialogueCore.isResetCommand(plainTextMessage);
 	}
 
-	private void onFailure(LlmFailureType failureType, String failureMessage, long tick, SemanticEventBuffer eventBuffer) {
-		lastFailureType = failureType;
-		lastFailureTick = tick;
-		consecutiveFailureCount++;
-
-		String eventType = switch (failureType) {
-			case TIMEOUT -> "planner.timeout";
-			case PARSE_ERROR -> "planner.parse_error";
-			case PROVIDER_ERROR, PROVIDER_UNAVAILABLE -> "planner.provider_error";
-		};
-		eventBuffer.append(tick, eventType, Map.of(
-			"failureType", failureType.name(),
-			"message", failureMessage == null ? "" : failureMessage
-		));
-
-		if (failureType == LlmFailureType.PARSE_ERROR) {
-			recordResponse(new DialogueResponse(
-				PARSE_ERROR_MESSAGE,
-				new DialogueIntent(DialogueIntentType.ACKNOWLEDGE_FAILURE, null, null),
-				tick
-			));
-			recordAgentTurn(PARSE_ERROR_MESSAGE, tick);
+	private void submitPlannerTrigger(
+		PlannerRequest request,
+		SemanticEventBuffer eventBuffer,
+		long timestampMs,
+		boolean timeoutVisibleReply
+	) {
+		if (state.degraded()) {
+			return;
 		}
-
-		if (consecutiveFailureCount >= DEGRADED_FAILURE_THRESHOLD && !degraded) {
-			degraded = true;
-			eventBuffer.append(tick, "planner.degraded_entered", Map.of(
-				"failureType", failureType.name(),
-				"consecutiveFailureCount", consecutiveFailureCount
-			));
-			recordResponse(new DialogueResponse(
-				DEGRADED_MESSAGE,
-				new DialogueIntent(DialogueIntentType.ACKNOWLEDGE_FAILURE, null, null),
-				tick
-			));
-			recordAgentTurn(DEGRADED_MESSAGE, tick);
-		}
+		Long sinceSeqNo = plannerOrchestrator.lastObservedEventSeqNo();
+		plannerOrchestrator.recordEvents(
+			eventBuffer.query(sinceSeqNo <= 0L ? null : sinceSeqNo),
+			new PlannerRequestSeed(
+				request.tick(),
+				timestampMs,
+				request.sessionMode(),
+				request.primaryInteractionPlayer(),
+				request.activeGoal()
+			)
+		);
+		pendingTimeoutVisibleReply = timeoutVisibleReply;
+		plannerOrchestrator.submit(request);
 	}
 
 	private void recordAgentTurn(String text, long tick) {
@@ -319,14 +381,33 @@ public final class DialogueRuntime {
 		}
 	}
 
-	private static PlannerOrchestrator defaultOrchestrator(ai.moeru.airicraft.agent.AgentConfig.LlmConfig config, Clock clock) {
-		return new PlannerOrchestrator(
-			new PlannerExecutor(new OpenAiCompatibleLlmBackend(config)),
-			new PlannerCompactionService(new OpenAiCompatibleChatClient(config)),
-			new PlannerContextAggregator(clock, config.plannerCompactionTriggerTokens(), config.plannerVisionMode()),
-			CurrentViewVisionTool.disabled(),
-			config.plannerVisionMode(),
-			config.visionImageDetail()
+	private void applyTransition(DialogueTransition transition, long tick, SemanticEventBuffer eventBuffer) {
+		state = transition.state();
+		applyEffects(transition.effects(), tick, eventBuffer);
+		for (DialogueResponse response : transition.visibleResponses()) {
+			if (response != null && response.text() != null && !response.text().isBlank()) {
+				recordAgentTurn(response.text(), tick);
+			}
+		}
+	}
+
+	private static void applyEffects(List<DialogueEffect> effects, long tick, SemanticEventBuffer eventBuffer) {
+		for (DialogueEffect effect : effects) {
+			if (effect instanceof DialogueEffect.AppendSemanticEvent appendSemanticEvent) {
+				eventBuffer.append(tick, appendSemanticEvent.type(), appendSemanticEvent.payload());
+			}
+		}
+	}
+
+	private static boolean isDirectChatRequest(PlannerRequest request) {
+		if (request == null || request.triggerBatch() == null || request.triggerBatch().triggers().isEmpty()) {
+			return false;
+		}
+		return request.triggerBatch().triggers().stream().allMatch(trigger ->
+			trigger.type() == PlannerTriggerType.CHAT
+				&& trigger.speaker() != null
+				&& !"system".equalsIgnoreCase(trigger.speaker())
 		);
 	}
+
 }

@@ -8,6 +8,7 @@ import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -55,15 +56,21 @@ class AiricraftCliMainTest {
 				"captureInFlight", false,
 				"toolInFlight", false,
 				"toolUsed", false,
+				"coalescePending", true,
+				"coalesceReadyAtMs", 123456999L,
+				"coalesceWindowMs", 20L,
 				"context", linkedMap(
 					"compactionTriggerTokens", 65536,
 					"compactionPending", true,
-					"rawArchiveEntryCount", 12,
-					"canonicalMessageCount", 8,
-					"pendingEntryCount", 1,
+					"acceptedTurnCount", 8,
+					"pendingSemanticEventCount", 3,
+					"projectedPendingNoticeCount", 2,
 					"frozenPlannerMessageCount", 0,
+					"queuedTriggerCount", 3,
 					"lastObservedEventSeqNo", 42,
-					"lastTimeBeaconAtMs", 123456789L
+					"lastAcceptedTimeContextAtMs", 123456789L,
+					"pendingSemanticGap", false,
+					"overflowFlushPending", true
 				)
 			)
 		);
@@ -74,7 +81,170 @@ class AiricraftCliMainTest {
 		assertTrue(result.output().contains("command: agent context\n"));
 		assertTrue(result.output().contains("plannerVisionMode: native_tool_image\n"));
 		assertTrue(result.output().contains("compactionPending: true\n"));
-		assertTrue(result.output().contains("canonicalMessageCount: 8\n"));
+		assertTrue(result.output().contains("coalescePending: true\n"));
+		assertTrue(result.output().contains("coalesceWindowMs: 20\n"));
+		assertTrue(result.output().contains("queuedTriggerCount: 3\n"));
+		assertTrue(result.output().contains("acceptedTurnCount: 8\n"));
+		assertTrue(result.output().contains("projectedPendingNoticeCount: 2\n"));
+		assertTrue(result.output().contains("overflowFlushPending: true\n"));
+	}
+
+	@Test
+	void agentContextVerboseIncludesContextExcerpt() {
+		TestTransport transport = new TestTransport();
+		transport.agentContextPayload = linkedMap(
+			"available", true,
+			"planner", linkedMap(
+				"configured", true,
+				"context", linkedMap(
+					"acceptedTurnCount", 1
+				)
+			),
+			"contextExcerpt", List.of(
+				"Context update: You took 4 damage from minecraft:fall and dropped to 16 health just now."
+			)
+		);
+
+		CliResult result = execute(transport, "agent", "context", "--verbose");
+
+		assertEquals(0, result.exitCode());
+		assertTrue(result.output().contains("contextExcerptLineCount: 1\n"));
+		assertTrue(result.output().contains("value: Context update: You took 4 damage from minecraft:fall and dropped to 16 health just now.\n"));
+	}
+
+	@Test
+	void agentSessionOpenLanRendersDeterministicText() {
+		TestTransport transport = new TestTransport();
+		transport.agentSessionOpenLanPayload = linkedMap(
+			"opened", true,
+			"port", 25565
+		);
+
+		CliResult result = execute(transport, "agent", "session", "open-lan");
+
+		assertEquals(0, result.exitCode());
+		assertTrue(result.output().startsWith(
+			"status: ok\n" +
+				"command: agent session open-lan\n"
+		));
+		assertTrue(result.output().contains("opened: true\n"));
+		assertTrue(result.output().contains("port: 25565\n"));
+	}
+
+	@Test
+	void agentDebugChatPassesMessagePayload() {
+		TestTransport transport = new TestTransport();
+		transport.agentDebugChatPayload = linkedMap(
+			"available", true,
+			"accepted", true,
+			"senderName", "Player688",
+			"message", "@agent get me 4 wood logs"
+		);
+
+		CliResult result = execute(
+			transport,
+			"agent", "debug", "chat",
+			"--message", "@agent get me 4 wood logs"
+		);
+
+		assertEquals(0, result.exitCode());
+		assertEquals("@agent get me 4 wood logs", transport.lastDebugChatMessage);
+		assertTrue(result.output().contains("command: agent debug chat\n"));
+		assertTrue(result.output().contains("accepted: true\n"));
+	}
+
+	@Test
+	void agentDebugStateRendersCorrelatedSummary() {
+		TestTransport transport = new TestTransport();
+		transport.agentDebugStatePayload = linkedMap(
+			"available", true,
+			"planner", linkedMap(
+				"configured", true,
+				"plannerVisionMode", "native_tool_image",
+				"inFlight", false,
+				"plannerInFlight", false,
+				"compactionInFlight", false,
+				"toolInFlight", false,
+				"activeGeneration", 7,
+				"currentPhase", "PLANNER_REQUEST",
+				"activeAttemptCount", 1
+			),
+			"dialogueState", linkedMap(
+				"pendingReply", true,
+				"pendingReplyReason", "failure_reused_last_response",
+				"degraded", false,
+				"consecutiveFailureCount", 1,
+				"lastFailureType", "TIMEOUT",
+				"lastFailureTick", 120
+			),
+			"conversationSources", linkedMap(
+				"canonicalMessageCount", 6,
+				"projectedMessageCount", 4,
+				"canonicalUserTurnCount", 2,
+				"projectedUserTurnCount", 1,
+				"hiddenKinds", List.of("USER_TURN")
+			),
+			"taskProgressProbe", linkedMap(
+				"active", true,
+				"resourceKind", "WOOD_LOGS",
+				"inventoryDelta", 3,
+				"targetQuantity", 16,
+				"remaining", 13,
+				"activeJobStatus", "RUNNING"
+			),
+			"chatProbe", linkedMap(
+				"lastAttemptSource", "failure_reused_last_response",
+				"lastAttemptReusedPriorResponse", true,
+				"lastSendSucceeded", true
+			),
+			"eventPipeline", linkedMap(
+				"lastEventType", "pickup.item_picked_up",
+				"lastTriggerType", "PICKUP",
+				"lastEmitSemantic", true,
+				"lastEmitTrigger", true
+			),
+			"plannerAttempts", List.of(linkedMap("submissionId", 1)),
+			"timelineTail", List.of(linkedMap("entryId", 9))
+		);
+
+		CliResult result = execute(transport, "agent", "debug", "state");
+
+		assertEquals(0, result.exitCode());
+		assertTrue(result.output().contains("command: agent debug state\n"));
+		assertTrue(result.output().contains("pendingReplyReason: failure_reused_last_response\n"));
+		assertTrue(result.output().contains("hiddenKinds:\n"));
+		assertTrue(result.output().contains("value: USER_TURN\n"));
+		assertTrue(result.output().contains("inventoryDelta: 3\n"));
+		assertTrue(result.output().contains("plannerAttemptCount: 1\n"));
+	}
+
+	@Test
+	void agentDebugTimelinePassesSinceAndRendersEntries() {
+		TestTransport transport = new TestTransport();
+		transport.agentDebugTimelinePayload = linkedMap(
+			"available", true,
+			"oldestEntryId", 3,
+			"latestEntryId", 7,
+			"truncated", false,
+			"entries", List.of(
+				linkedMap(
+					"entryId", 7,
+					"tick", 120,
+					"timestampMs", 123456L,
+					"domain", "planner",
+					"action", "failure",
+					"summary", "TIMEOUT: LLM request timed out"
+				)
+			)
+		);
+
+		CliResult result = execute(transport, "agent", "debug", "timeline", "--since", "4");
+
+		assertEquals(0, result.exitCode());
+		assertEquals(4L, transport.lastDebugTimelineSince);
+		assertTrue(result.output().contains("command: agent debug timeline\n"));
+		assertTrue(result.output().contains("entryCount: 1\n"));
+		assertTrue(result.output().contains("summary: TIMEOUT: LLM request timed out\n"));
 	}
 
 	@Test
@@ -98,6 +268,219 @@ class AiricraftCliMainTest {
 	}
 
 	@Test
+	void agentEventPolicyShowsRuleSummary() {
+		TestTransport transport = new TestTransport();
+		transport.agentEventPolicyPayload = linkedMap(
+			"available", true,
+			"activeRuleCount", 2,
+			"recentInterventionCount", 1,
+			"lastDecision", linkedMap(
+				"matchedRuleId", "mute-system",
+				"effect", "IGNORE",
+				"reason", "suppress noisy system spam",
+				"bypassed", false
+			),
+			"activeRules", List.of(
+				linkedMap("ruleId", "mute-system", "effect", "IGNORE")
+			),
+			"recentInterventions", List.of(
+				linkedMap("matchedRuleId", "mute-system", "effect", "IGNORE")
+			)
+		);
+
+		CliResult result = execute(transport, "agent", "event-policy");
+
+		assertEquals(0, result.exitCode());
+		assertTrue(result.output().contains("command: agent event-policy\n"));
+		assertTrue(result.output().contains("activeRuleCount: 2\n"));
+		assertTrue(result.output().contains("matchedRuleId: mute-system\n"));
+	}
+
+	@Test
+	void agentEventPolicyClearCallsTransport() {
+		TestTransport transport = new TestTransport();
+		transport.agentEventPolicyPayload = linkedMap(
+			"available", true,
+			"activeRuleCount", 0,
+			"recentInterventionCount", 0,
+			"activeRules", List.of(),
+			"recentInterventions", List.of()
+		);
+
+		CliResult result = execute(transport, "agent", "event-policy", "clear");
+
+		assertEquals(0, result.exitCode());
+		assertTrue(transport.agentEventPolicyCleared);
+		assertTrue(result.output().contains("command: agent event-policy clear\n"));
+		assertTrue(result.output().contains("activeRuleCount: 0\n"));
+	}
+
+	@Test
+	void agentTasksShowsCurrentTaskSnapshot() {
+		TestTransport transport = new TestTransport();
+		transport.agentTasksPayload = linkedMap(
+			"available", true,
+			"task", linkedMap(
+				"state", "RUNNING",
+				"spec", linkedMap(
+					"type", "COLLECT_RESOURCE",
+					"resourceKind", "WOOD_LOGS",
+					"quantity", 4
+				)
+			)
+		);
+
+		CliResult result = execute(transport, "agent", "tasks");
+
+		assertEquals(0, result.exitCode());
+		assertTrue(result.output().contains("command: agent tasks\n"));
+		assertTrue(result.output().contains("state: RUNNING\n"));
+		assertTrue(result.output().contains("resourceKind: WOOD_LOGS\n"));
+	}
+
+	@Test
+	void agentTasksSubmitPassesNormalizedTaskPayload() {
+		TestTransport transport = new TestTransport();
+		transport.agentTaskSubmitPayload = linkedMap(
+			"available", true,
+			"task", linkedMap("state", "QUEUED")
+		);
+
+		CliResult result = execute(
+			transport,
+			"agent", "tasks", "submit",
+			"--type", "collect-resource",
+			"--resource", "wood-logs",
+			"--quantity", "4"
+		);
+
+		assertEquals(0, result.exitCode());
+		assertEquals("COLLECT_RESOURCE", transport.lastSubmittedTask.get("type"));
+		assertEquals("WOOD_LOGS", transport.lastSubmittedTask.get("resourceKind"));
+		assertEquals(4, transport.lastSubmittedTask.get("quantity"));
+		assertTrue(result.output().contains("command: agent tasks submit\n"));
+	}
+
+	@Test
+	void agentLedgerRendersCurrentMissionLedger() {
+		TestTransport transport = new TestTransport();
+		transport.agentLedgerPayload = linkedMap(
+			"available", true,
+			"ledger", linkedMap(
+				"missionId", "mission-wood-1",
+				"activeStepId", "collect_logs"
+			)
+		);
+
+		CliResult result = execute(transport, "agent", "ledger");
+
+		assertEquals(0, result.exitCode());
+		assertTrue(result.output().contains("command: agent ledger\n"));
+		assertTrue(result.output().contains("missionId: mission-wood-1\n"));
+		assertTrue(result.output().contains("activeStepId: collect_logs\n"));
+	}
+
+	@Test
+	void agentEvidenceRendersWorldEvidenceSummary() {
+		TestTransport transport = new TestTransport();
+		transport.agentEvidencePayload = linkedMap(
+			"available", true,
+			"evidence", linkedMap(
+				"dimension", "minecraft:overworld",
+				"inventoryCounts", linkedMap(
+					"WOOD_LOGS", 4
+				)
+			)
+		);
+
+		CliResult result = execute(transport, "agent", "evidence");
+
+		assertEquals(0, result.exitCode());
+		assertTrue(result.output().contains("command: agent evidence\n"));
+		assertTrue(result.output().contains("dimension: minecraft:overworld\n"));
+		assertTrue(result.output().contains("WOOD_LOGS: 4\n"));
+	}
+
+	@Test
+	void agentStepExecutionRendersLatestStepResult() {
+		TestTransport transport = new TestTransport();
+		transport.agentStepExecutionPayload = linkedMap(
+			"available", true,
+			"stepExecution", linkedMap(
+				"stepId", "craft_sticks",
+				"status", "RUNNING"
+			)
+		);
+
+		CliResult result = execute(transport, "agent", "step-execution");
+
+		assertEquals(0, result.exitCode());
+		assertTrue(result.output().contains("command: agent step-execution\n"));
+		assertTrue(result.output().contains("stepId: craft_sticks\n"));
+		assertTrue(result.output().contains("status: RUNNING\n"));
+	}
+
+	@Test
+	void agentMissionSubmitPassesNormalizedMissionPayload() {
+		TestTransport transport = new TestTransport();
+		transport.agentMissionSubmitPayload = linkedMap(
+			"available", true,
+			"task", linkedMap("state", "QUEUED")
+		);
+
+		CliResult result = execute(
+			transport,
+			"agent", "mission", "submit",
+			"--type", "collect-resource",
+			"--resource", "wood-logs",
+			"--quantity", "4"
+		);
+
+		assertEquals(0, result.exitCode());
+		assertEquals("COLLECT_RESOURCE", transport.lastSubmittedMission.get("type"));
+		assertEquals("WOOD_LOGS", transport.lastSubmittedMission.get("resourceKind"));
+		assertEquals(4, transport.lastSubmittedMission.get("quantity"));
+		assertTrue(result.output().contains("command: agent mission submit\n"));
+	}
+
+	@Test
+	void agentMissionSubmitReadsLedgerPayloadFromFile(@TempDir Path tempDir) throws Exception {
+		TestTransport transport = new TestTransport();
+		transport.agentMissionSubmitPayload = linkedMap(
+			"available", true,
+			"task", linkedMap("state", "QUEUED")
+		);
+		Path ledgerFile = tempDir.resolve("ledger.json");
+		Files.writeString(
+			ledgerFile,
+			"""
+				{
+				  "missionId": "mission-craft-1",
+				  "missionType": "CRAFT_TOOL",
+				  "goalText": "Turn wood into sticks",
+				  "steps": [],
+				  "activeStepId": null,
+				  "completionCriteria": [],
+				  "replanReason": "debug",
+				  "plannerNotes": "manual"
+				}
+				""",
+			StandardCharsets.UTF_8
+		);
+
+		CliResult result = execute(
+			transport,
+			"agent", "mission", "submit",
+			"--ledger-file", ledgerFile.toString()
+		);
+
+		assertEquals(0, result.exitCode());
+		assertEquals("mission-craft-1", transport.lastSubmittedMission.get("missionId"));
+		assertEquals("CRAFT_TOOL", transport.lastSubmittedMission.get("missionType"));
+		assertTrue(result.output().contains("command: agent mission submit\n"));
+	}
+
+	@Test
 	void agentCompactPassesWaitAndTimeout() {
 		TestTransport transport = new TestTransport();
 		transport.agentCompactPayload = linkedMap(
@@ -115,8 +498,7 @@ class AiricraftCliMainTest {
 				"toolInFlight", false,
 				"context", linkedMap(
 					"compactionPending", false,
-					"canonicalMessageCount", 5,
-					"rawArchiveEntryCount", 9
+					"acceptedTurnCount", 5
 				)
 			)
 		);
@@ -128,6 +510,152 @@ class AiricraftCliMainTest {
 		assertEquals(Integer.valueOf(7000), transport.lastCompactTimeoutMs);
 		assertTrue(result.output().contains("command: agent compact\n"));
 		assertTrue(result.output().contains("completed: false\n"));
+	}
+
+	@Test
+	void verificationStatusShowsCapabilities() {
+		TestTransport transport = new TestTransport();
+		transport.verificationStatusPayload = linkedMap(
+			"available", true,
+			"sessionMode", "SINGLEPLAYER_LOCAL",
+			"worldLoaded", true,
+			"capabilities", List.of("player_state", "scenario_run")
+		);
+
+		CliResult result = execute(transport, "verification", "status", "--verbose");
+
+		assertEquals(0, result.exitCode());
+		assertTrue(result.output().contains("command: verification status\n"));
+		assertTrue(result.output().contains("capabilityCount: 2\n"));
+		assertTrue(result.output().contains("[capability 1]\n"));
+		assertTrue(result.output().contains("value: player_state\n"));
+	}
+
+	@Test
+	void verificationPlayerTeleportPassesCoordinates() {
+		TestTransport transport = new TestTransport();
+		transport.verificationPlayerPayload = linkedMap(
+			"available", true,
+			"sessionMode", "SINGLEPLAYER_LOCAL",
+			"worldLoaded", true,
+			"teleported", true,
+			"x", 10.5D,
+			"y", 94.0D,
+			"z", -3.0D,
+			"health", 20.0D,
+			"maxHealth", 20.0D,
+			"food", 20,
+			"saturation", 5.0D,
+			"onGround", false,
+			"fallDistance", 0.0D,
+			"gameMode", "survival",
+			"dimensionId", "minecraft:overworld"
+		);
+
+		CliResult result = execute(transport, "verification", "player", "teleport", "--x", "10.5", "--y", "94", "--z", "-3");
+
+		assertEquals(0, result.exitCode());
+		assertEquals(10.5D, transport.lastTeleportX);
+		assertEquals(94.0D, transport.lastTeleportY);
+		assertEquals(-3.0D, transport.lastTeleportZ);
+		assertTrue(result.output().contains("teleported: true\n"));
+		assertTrue(result.output().contains("gameMode: survival\n"));
+	}
+
+	@Test
+	void verificationPlayerVelocityPassesComponents() {
+		TestTransport transport = new TestTransport();
+		transport.verificationPlayerPayload = linkedMap(
+			"available", true,
+			"sessionMode", "SINGLEPLAYER_LOCAL",
+			"worldLoaded", true,
+			"applied", true,
+			"x", 10.5D,
+			"y", 94.0D,
+			"z", -3.0D,
+			"health", 20.0D,
+			"maxHealth", 20.0D,
+			"food", 20,
+			"saturation", 5.0D,
+			"onGround", false,
+			"fallDistance", 0.0D,
+			"gameMode", "survival",
+			"dimensionId", "minecraft:overworld"
+		);
+
+		CliResult result = execute(transport, "verification", "player", "velocity", "--x", "0", "--y", "1.5", "--z", "-0.25");
+
+		assertEquals(0, result.exitCode());
+		assertEquals(0.0D, transport.lastVelocityX);
+		assertEquals(1.5D, transport.lastVelocityY);
+		assertEquals(-0.25D, transport.lastVelocityZ);
+		assertTrue(result.output().contains("applied: true\n"));
+	}
+
+	@Test
+	void verificationPlayerRespawnCallsTransport() {
+		TestTransport transport = new TestTransport();
+		transport.verificationPlayerPayload = linkedMap(
+			"available", true,
+			"sessionMode", "SINGLEPLAYER_LOCAL",
+			"worldLoaded", true,
+			"respawned", true,
+			"health", 20.0D,
+			"currentScreen", "in_game"
+		);
+
+		CliResult result = execute(transport, "verification", "player", "respawn");
+
+		assertEquals(0, result.exitCode());
+		assertTrue(transport.verificationRespawnCalled);
+		assertTrue(result.output().contains("respawned: true\n"));
+	}
+
+	@Test
+	void verificationRunPassesScenarioName() {
+		TestTransport transport = new TestTransport();
+		transport.verificationRunPayload = linkedMap(
+			"accepted", true,
+			"scenario", "damage.fall_context",
+			"running", true
+		);
+
+		CliResult result = execute(transport, "verification", "run", "--scenario", "damage.fall_context");
+
+		assertEquals(0, result.exitCode());
+		assertEquals("damage.fall_context", transport.lastVerificationScenario);
+		assertTrue(result.output().contains("scenario: damage.fall_context\n"));
+	}
+
+	@Test
+	void verificationResultsVerboseShowsDiagnostics() {
+		TestTransport transport = new TestTransport();
+		transport.verificationResultsPayload = linkedMap(
+			"available", true,
+			"scenarios", List.of("damage.fall_context"),
+			"report", linkedMap(
+				"status", "FAILED",
+				"scenarioName", "damage.fall_context",
+				"message", "Timed out after 300 ticks",
+				"steps", List.of(linkedMap(
+					"description", "planner context shows new damage notice",
+					"status", "FAILED",
+					"waitedTicks", 300,
+					"message", "Timed out after 300 ticks"
+				)),
+				"diagnostics", linkedMap(
+					"failureReason", "Timed out after 300 ticks"
+				)
+			)
+		);
+
+		CliResult result = execute(transport, "verification", "results", "--verbose");
+
+		assertEquals(0, result.exitCode());
+		assertTrue(result.output().contains("reportStatus: FAILED\n"));
+		assertTrue(result.output().contains("[report]\n"));
+		assertTrue(result.output().contains("[diagnostics]\n"));
+		assertTrue(result.output().contains("failureReason: Timed out after 300 ticks\n"));
 	}
 
 	@Test
@@ -171,7 +699,7 @@ class AiricraftCliMainTest {
 				"unavailable", false,
 				"experimental", false,
 				"details", "A long details string",
-				"version", "1.21.11"
+				"version", "1.21.8"
 			))
 		);
 
@@ -182,7 +710,7 @@ class AiricraftCliMainTest {
 		assertTrue(compact.output().contains("worldCount: 1\n"));
 		assertFalse(compact.output().contains("details:"));
 		assertTrue(verbose.output().contains("details: A long details string\n"));
-		assertTrue(verbose.output().contains("version: 1.21.11\n"));
+		assertTrue(verbose.output().contains("version: 1.21.8\n"));
 	}
 
 	@Test
@@ -306,6 +834,7 @@ class AiricraftCliMainTest {
 	private static CliResult execute(MinecraftTransport transport, String... args) {
 		StringWriter writer = new StringWriter();
 		CommandLine commandLine = AiricraftCliMain.createCommandLine(transport, new PrintWriter(writer, true));
+		commandLine.setColorScheme(new CommandLine.Help.ColorScheme.Builder().ansi(CommandLine.Help.Ansi.OFF).build());
 		int exitCode = commandLine.execute(args);
 		return new CliResult(exitCode, writer.toString().replace("\r\n", "\n"));
 	}
@@ -329,12 +858,27 @@ class AiricraftCliMainTest {
 		private Map<String, Object> snapshotPayload = Map.of();
 		private Map<String, Object> agentStatusPayload = Map.of();
 		private Map<String, Object> agentSessionPayload = Map.of();
+		private Map<String, Object> agentSessionOpenLanPayload = Map.of();
 		private Map<String, Object> agentGoalsPayload = Map.of();
 		private Map<String, Object> agentTreePayload = Map.of();
 		private Map<String, Object> agentDialoguePayload = Map.of();
+		private Map<String, Object> agentDebugStatePayload = Map.of();
+		private Map<String, Object> agentDebugTimelinePayload = Map.of("entries", List.of());
+		private Map<String, Object> agentDebugChatPayload = Map.of();
 		private Map<String, Object> agentContextPayload = Map.of();
+		private Map<String, Object> agentTasksPayload = Map.of();
+		private Map<String, Object> agentLedgerPayload = Map.of();
+		private Map<String, Object> agentEvidencePayload = Map.of();
+		private Map<String, Object> agentStepExecutionPayload = Map.of();
+		private Map<String, Object> agentTaskSubmitPayload = Map.of();
+		private Map<String, Object> agentMissionSubmitPayload = Map.of();
 		private Map<String, Object> agentEventsPayload = Map.of("events", List.of());
 		private Map<String, Object> agentCompactPayload = Map.of("started", true);
+		private Map<String, Object> agentEventPolicyPayload = Map.of("activeRules", List.of(), "recentInterventions", List.of());
+		private Map<String, Object> verificationStatusPayload = Map.of("capabilities", List.of());
+		private Map<String, Object> verificationPlayerPayload = Map.of();
+		private Map<String, Object> verificationRunPayload = Map.of("accepted", true);
+		private Map<String, Object> verificationResultsPayload = Map.of("scenarios", List.of(), "report", Map.of());
 		private Map<String, Object> blockHighlightPayload = Map.of("highlightId", "highlight-1");
 		private Map<String, Object> regionHighlightPayload = Map.of("highlightId", "highlight-2");
 		private Map<String, Object> highlightsPayload = Map.of("highlights", List.of());
@@ -349,6 +893,21 @@ class AiricraftCliMainTest {
 		private Long lastEventSince;
 		private boolean lastCompactWait = true;
 		private Integer lastCompactTimeoutMs;
+		private String lastVerificationScenario;
+		private Double lastTeleportX;
+		private Double lastTeleportY;
+		private Double lastTeleportZ;
+		private Double lastVelocityX;
+		private Double lastVelocityY;
+		private Double lastVelocityZ;
+		private String lastVerificationGameMode;
+		private String lastVerificationCommand;
+		private boolean verificationRespawnCalled;
+		private boolean agentEventPolicyCleared;
+		private Map<String, Object> lastSubmittedTask;
+		private Map<String, Object> lastSubmittedMission;
+		private String lastDebugChatMessage;
+		private Long lastDebugTimelineSince;
 
 		private RuntimeException worldsJoinFailure;
 		private RuntimeException serversListFailure;
@@ -450,6 +1009,11 @@ class AiricraftCliMainTest {
 		}
 
 		@Override
+		public Map<String, Object> openAgentSessionLan() {
+			return agentSessionOpenLanPayload;
+		}
+
+		@Override
 		public Map<String, Object> getAgentGoals() {
 			return agentGoalsPayload;
 		}
@@ -465,8 +1029,62 @@ class AiricraftCliMainTest {
 		}
 
 		@Override
+		public Map<String, Object> getAgentDebugState() {
+			return agentDebugStatePayload;
+		}
+
+		@Override
+		public Map<String, Object> listAgentDebugTimeline(Long sinceEntryId) {
+			lastDebugTimelineSince = sinceEntryId;
+			return agentDebugTimelinePayload;
+		}
+
+		@Override
+		public Map<String, Object> sendAgentDebugChat(String message) {
+			lastDebugChatMessage = message;
+			return agentDebugChatPayload;
+		}
+
+		@Override
 		public Map<String, Object> getAgentContext() {
 			return agentContextPayload;
+		}
+
+		@Override
+		public Map<String, Object> getAgentTasks() {
+			return agentTasksPayload;
+		}
+
+		@Override
+		public Map<String, Object> submitAgentTask(Map<String, Object> taskPayload) {
+			lastSubmittedTask = taskPayload;
+			return agentTaskSubmitPayload;
+		}
+
+		@Override
+		public Map<String, Object> getAgentLedger() {
+			return agentLedgerPayload;
+		}
+
+		@Override
+		public Map<String, Object> getAgentEvidence() {
+			return agentEvidencePayload;
+		}
+
+		@Override
+		public Map<String, Object> getAgentStepExecution() {
+			return agentStepExecutionPayload;
+		}
+
+		@Override
+		public Map<String, Object> submitAgentMission(Map<String, Object> missionPayload) {
+			lastSubmittedMission = missionPayload;
+			return agentMissionSubmitPayload;
+		}
+
+		@Override
+		public Map<String, Object> cancelAgentTask() {
+			return Map.of("available", true, "cancelled", true);
 		}
 
 		@Override
@@ -480,6 +1098,72 @@ class AiricraftCliMainTest {
 			lastCompactWait = wait;
 			lastCompactTimeoutMs = timeoutMs;
 			return agentCompactPayload;
+		}
+
+		@Override
+		public Map<String, Object> getAgentEventPolicy() {
+			return agentEventPolicyPayload;
+		}
+
+		@Override
+		public Map<String, Object> clearAgentEventPolicy() {
+			agentEventPolicyCleared = true;
+			return agentEventPolicyPayload;
+		}
+
+		@Override
+		public Map<String, Object> getVerificationStatus() {
+			return verificationStatusPayload;
+		}
+
+		@Override
+		public Map<String, Object> getVerificationPlayerState() {
+			return verificationPlayerPayload;
+		}
+
+		@Override
+		public Map<String, Object> teleportVerificationPlayer(double x, double y, double z) {
+			lastTeleportX = x;
+			lastTeleportY = y;
+			lastTeleportZ = z;
+			return verificationPlayerPayload;
+		}
+
+		@Override
+		public Map<String, Object> setVerificationPlayerVelocity(double x, double y, double z) {
+			lastVelocityX = x;
+			lastVelocityY = y;
+			lastVelocityZ = z;
+			return verificationPlayerPayload;
+		}
+
+		@Override
+		public Map<String, Object> respawnVerificationPlayer() {
+			verificationRespawnCalled = true;
+			return verificationPlayerPayload;
+		}
+
+		@Override
+		public Map<String, Object> setVerificationPlayerGameMode(String mode) {
+			lastVerificationGameMode = mode;
+			return verificationPlayerPayload;
+		}
+
+		@Override
+		public Map<String, Object> runVerificationCommand(String command) {
+			lastVerificationCommand = command;
+			return verificationPlayerPayload;
+		}
+
+		@Override
+		public Map<String, Object> runVerificationScenario(String scenario) {
+			lastVerificationScenario = scenario;
+			return verificationRunPayload;
+		}
+
+		@Override
+		public Map<String, Object> getVerificationResults() {
+			return verificationResultsPayload;
 		}
 	}
 }

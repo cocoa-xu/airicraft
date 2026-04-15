@@ -1,9 +1,32 @@
 package ai.moeru.airicraft.agent.llm;
 
 import ai.moeru.airicraft.agent.events.SemanticEvent;
+import ai.moeru.airicraft.agent.events.SemanticEventQueryResult;
 import ai.moeru.airicraft.agent.goals.GoalSnapshot;
 import ai.moeru.airicraft.agent.goals.GoalType;
 import ai.moeru.airicraft.agent.session.SessionMode;
+import ai.moeru.airicraft.agent.tasks.LedgerStepKind;
+import ai.moeru.airicraft.agent.tasks.MissionExecutionSnapshot;
+import ai.moeru.airicraft.agent.tasks.MissionSpec;
+import ai.moeru.airicraft.agent.tasks.MissionType;
+import ai.moeru.airicraft.agent.tasks.LedgerStep;
+import ai.moeru.airicraft.agent.tasks.LedgerStepPayload;
+import ai.moeru.airicraft.agent.tasks.LedgerStepStatus;
+import ai.moeru.airicraft.agent.tasks.TaskLedger;
+import ai.moeru.airicraft.agent.tasks.StepExecutionResult;
+import ai.moeru.airicraft.agent.tasks.StepExecutionStatus;
+import ai.moeru.airicraft.agent.tasks.TaskExecutionSnapshot;
+import ai.moeru.airicraft.agent.tasks.TaskOwnership;
+import ai.moeru.airicraft.agent.tasks.TaskProgressSnapshot;
+import ai.moeru.airicraft.agent.tasks.TaskSnapshot;
+import ai.moeru.airicraft.agent.tasks.TaskState;
+import ai.moeru.airicraft.agent.tasks.TaskStep;
+import ai.moeru.airicraft.agent.tasks.WorldEvidence;
+import ai.moeru.airicraft.agent.tasks.CollectResourceStepArgs;
+import ai.moeru.airicraft.agent.tasks.EvidenceKind;
+import ai.moeru.airicraft.agent.tasks.EvidenceRequirement;
+import ai.moeru.airicraft.agent.tasks.TaskResourceKind;
+import com.google.gson.JsonParser;
 import org.junit.jupiter.api.Test;
 
 import java.time.Clock;
@@ -22,42 +45,50 @@ class PlannerContextAggregatorTest {
 		Clock clock = Clock.fixed(Instant.ofEpochMilli(1_000L), ZoneId.of("Asia/Taipei"));
 		PlannerContextAggregator aggregator = new PlannerContextAggregator(clock, 65_536, PlannerVisionMode.EXTERNAL_SUMMARY);
 
-		LlmConversation first = aggregator.buildPlannerConversation(requestAt(1_000L, "Alice", "@agent hi"));
+		PlannerContextSnapshot firstSnapshot = freezeSnapshot(aggregator, requestAt(1_000L, "Alice", "@agent hi"));
+		LlmConversation first = firstSnapshot.plannerConversation();
 		assertEquals(6, first.messages().size());
 		assertEquals(LlmMessageKind.NOTICE, first.messages().get(1).kind());
 		assertTrue(first.messages().get(1).content().contains("local time"));
 		assertTrue(first.messages().stream().anyMatch(message -> message.content().contains("Session mode is currently out of world.")));
 		assertTrue(first.messages().stream().anyMatch(message -> message.content().contains("There is no primary interaction player right now.")));
 		assertTrue(first.messages().stream().anyMatch(message -> message.content().contains("There is no active goal right now.")));
+		aggregator.commitAcceptedTriggerBatch(firstSnapshot);
 
-		LlmConversation second = aggregator.buildPlannerConversation(requestAt(10 * 60_000L, "Alice", "@agent follow me"));
+		PlannerContextSnapshot secondSnapshot = freezeSnapshot(aggregator, requestAt(10 * 60_000L, "Alice", "@agent follow me"));
+		LlmConversation second = secondSnapshot.plannerConversation();
 		long noticeCount = second.messages().stream().filter(message -> message.kind() == LlmMessageKind.NOTICE).count();
-		assertEquals(4L, noticeCount);
+		assertEquals(0L, noticeCount);
+		aggregator.commitAcceptedTriggerBatch(secondSnapshot);
 
-		LlmConversation third = aggregator.buildPlannerConversation(requestAt(31 * 60_000L, "Alice", "@agent stop"));
+		PlannerContextSnapshot thirdSnapshot = freezeSnapshot(aggregator, requestAt(31 * 60_000L, "Alice", "@agent stop"));
+		LlmConversation third = thirdSnapshot.plannerConversation();
 		long updatedNoticeCount = third.messages().stream().filter(message -> message.kind() == LlmMessageKind.NOTICE).count();
-		assertEquals(5L, updatedNoticeCount);
+		assertEquals(1L, updatedNoticeCount);
 	}
 
 	@Test
 	void recordsAmbientContextAndSemanticEventsAsFrozenNotices() {
 		Clock clock = Clock.fixed(Instant.ofEpochMilli(10_000L), ZoneId.of("Asia/Taipei"));
 		PlannerContextAggregator aggregator = new PlannerContextAggregator(clock, 65_536, PlannerVisionMode.EXTERNAL_SUMMARY);
-		aggregator.recordEvents(List.of(
+		recordEvents(aggregator, 10_000L, List.of(
 			new SemanticEvent(1L, 100L, 8_000L, "follow.target_acquired", Map.of("player", "Alice")),
 			new SemanticEvent(2L, 101L, 9_000L, "planner.goal_set", Map.of("goalType", "FOLLOW_PLAYER", "targetPlayer", "Alice"))
-		), 10_000L);
+		));
 
-		LlmConversation conversation = aggregator.buildPlannerConversation(new PlannerRequest(
+		PlannerContextSnapshot snapshot = freezeSnapshot(aggregator, new PlannerRequest(
 			200L,
 			10_000L,
 			SessionMode.REMOTE_MULTIPLAYER,
 			"Alice",
 			new GoalSnapshot(GoalType.FOLLOW_PLAYER, "Alice", 200L, "planner"),
+			null,
+			null,
 			"Bob",
 			"status?",
 			null
 		));
+		LlmConversation conversation = snapshot.plannerConversation();
 
 		assertTrue(conversation.messages().stream().anyMatch(message -> message.content().contains("Primary interaction player is Alice.")));
 		assertTrue(conversation.messages().stream().anyMatch(message -> message.content().contains("Active goal: Follow Alice.")));
@@ -66,11 +97,171 @@ class PlannerContextAggregatorTest {
 	}
 
 	@Test
+	void recordsProjectedMixedEventBatchAsCoalescedNoticesInFirstSeenOrder() {
+		Clock clock = Clock.fixed(Instant.ofEpochMilli(10_000L), ZoneId.of("Asia/Taipei"));
+		PlannerContextAggregator aggregator = new PlannerContextAggregator(clock, 65_536, PlannerVisionMode.EXTERNAL_SUMMARY);
+		recordEvents(aggregator, 10_000L, List.of(
+			new SemanticEvent(1L, 100L, 8_000L, "pickup.item_picked_up", Map.of("actor", "self", "itemId", "minecraft:dirt", "count", 1)),
+			new SemanticEvent(2L, 101L, 8_100L, "pickup.item_picked_up", Map.of("actor", "self", "itemId", "minecraft:cobblestone", "count", 1)),
+			new SemanticEvent(3L, 102L, 8_200L, "pickup.item_picked_up", Map.of("actor", "self", "itemId", "minecraft:dirt", "count", 2)),
+			new SemanticEvent(4L, 103L, 8_300L, "follow.target_acquired", Map.of("player", "Alice"))
+		));
+
+		LlmConversation conversation = freezeSnapshot(aggregator, requestAt(10_000L, "Alice", "@agent hi")).plannerConversation();
+		List<LlmChatMessage> notices = conversation.messages().stream()
+			.filter(message -> message.kind() == LlmMessageKind.NOTICE)
+			.toList();
+
+		assertTrue(notices.stream().anyMatch(message -> message.content().contains("3x minecraft:dirt")));
+		assertTrue(notices.stream().anyMatch(message -> message.content().contains("1x minecraft:cobblestone")));
+		assertTrue(notices.stream().anyMatch(message -> message.content().contains("Started following Alice")));
+
+		int dirtIndex = indexContaining(notices, "3x minecraft:dirt");
+		int cobbleIndex = indexContaining(notices, "1x minecraft:cobblestone");
+		int followIndex = indexContaining(notices, "Started following Alice");
+		assertTrue(dirtIndex < cobbleIndex);
+		assertTrue(cobbleIndex < followIndex);
+	}
+
+	@Test
+	void coalescesMatchingSemanticUpdatesAcrossMultipleRecordBatchesBeforeFreeze() {
+		Clock clock = Clock.fixed(Instant.ofEpochMilli(10_000L), ZoneId.of("Asia/Taipei"));
+		PlannerContextAggregator aggregator = new PlannerContextAggregator(clock, 65_536, PlannerVisionMode.EXTERNAL_SUMMARY);
+
+		recordEvents(aggregator, 10_000L, List.of(
+			new SemanticEvent(1L, 100L, 8_000L, "pickup.item_picked_up", Map.of("actor", "self", "itemId", "minecraft:sunflower", "count", 1))
+		));
+		recordEvents(aggregator, 10_000L, List.of(
+			new SemanticEvent(2L, 101L, 8_100L, "pickup.item_picked_up", Map.of("actor", "self", "itemId", "minecraft:sunflower", "count", 1))
+		));
+		recordEvents(aggregator, 10_000L, List.of(
+			new SemanticEvent(3L, 102L, 8_200L, "pickup.item_picked_up", Map.of("actor", "self", "itemId", "minecraft:wheat_seeds", "count", 1))
+		));
+		recordEvents(aggregator, 10_000L, List.of(
+			new SemanticEvent(4L, 103L, 8_300L, "pickup.item_picked_up", Map.of("actor", "self", "itemId", "minecraft:sunflower", "count", 1))
+		));
+
+		LlmConversation conversation = freezeSnapshot(aggregator, requestAt(10_000L, "Alice", "@agent hi")).plannerConversation();
+		List<LlmChatMessage> notices = conversation.messages().stream()
+			.filter(message -> message.kind() == LlmMessageKind.NOTICE)
+			.filter(message -> message.content().contains("picked up"))
+			.toList();
+
+		assertEquals(2, notices.size());
+		assertTrue(notices.get(0).content().contains("3x minecraft:sunflower"));
+		assertTrue(notices.get(1).content().contains("1x minecraft:wheat_seeds"));
+	}
+
+	@Test
+	void coalescesMatchingDamageUpdatesAcrossMultipleRecordBatchesBeforeFreeze() {
+		Clock clock = Clock.fixed(Instant.ofEpochMilli(10_000L), ZoneId.of("Asia/Taipei"));
+		PlannerContextAggregator aggregator = new PlannerContextAggregator(clock, 65_536, PlannerVisionMode.EXTERNAL_SUMMARY);
+
+		recordEvents(aggregator, 10_000L, List.of(
+			damageEvent(1L, 100L, 8_000L, 2.0F, 18.0F)
+		));
+		recordEvents(aggregator, 10_000L, List.of(
+			damageEvent(2L, 101L, 8_100L, 1.5F, 16.5F)
+		));
+		recordEvents(aggregator, 10_000L, List.of(
+			new SemanticEvent(3L, 102L, 8_200L, "combat.damage_taken", Map.of(
+				"actor", "self",
+				"amount", 1.0F,
+				"healthBefore", 16.5F,
+				"healthAfter", 15.5F,
+				"fatal", false,
+				"damageTypeId", "minecraft:fall"
+			))
+		));
+
+		LlmConversation conversation = freezeSnapshot(aggregator, requestAt(10_000L, "Alice", "@agent hi")).plannerConversation();
+		List<LlmChatMessage> notices = conversation.messages().stream()
+			.filter(message -> message.kind() == LlmMessageKind.NOTICE)
+			.filter(message -> message.content().contains("took"))
+			.toList();
+
+		assertEquals(2, notices.size());
+		assertTrue(notices.get(0).content().contains("3.5 damage from Zombie"));
+		assertTrue(notices.get(0).content().contains("16.5 health"));
+		assertTrue(notices.get(1).content().contains("1 damage from minecraft:fall"));
+	}
+
+	@Test
+	void includesMissionAndEvidenceNoticesWhenPresent() {
+		Clock clock = Clock.fixed(Instant.ofEpochMilli(10_000L), ZoneId.of("Asia/Taipei"));
+		PlannerContextAggregator aggregator = new PlannerContextAggregator(clock, 65_536, PlannerVisionMode.EXTERNAL_SUMMARY);
+		TaskLedger ledger = new TaskLedger(
+			"mission-wood-1",
+			MissionType.COLLECT_RESOURCE,
+			"Collect 4 wood logs",
+			List.of(new LedgerStep(
+				"collect_logs",
+				LedgerStepKind.COLLECT_RESOURCE,
+				new LedgerStepPayload(
+					new CollectResourceStepArgs(TaskResourceKind.WOOD_LOGS, 4, "KEEP"),
+					null, null, null, null, null, null, null, null, null, null, null
+				),
+				List.of(),
+				LedgerStepStatus.ACTIVE,
+				List.of(new EvidenceRequirement(EvidenceKind.INVENTORY_DELTA_AT_LEAST, TaskResourceKind.WOOD_LOGS, 4, null, null)),
+				1,
+				"Collect logs"
+			)),
+			"collect_logs",
+			List.of(new EvidenceRequirement(EvidenceKind.INVENTORY_DELTA_AT_LEAST, TaskResourceKind.WOOD_LOGS, 4, null, null)),
+			"user_request",
+			"Keep it simple"
+		);
+
+		LlmConversation conversation = aggregator.buildPlannerConversation(new PlannerRequest(
+			200L,
+			10_000L,
+			SessionMode.REMOTE_MULTIPLAYER,
+			"Alice",
+			null,
+			new TaskSnapshot(
+				TaskState.RUNNING,
+				new MissionSpec("mission-wood-1", MissionType.COLLECT_RESOURCE, "Collect 4 wood logs"),
+				ledger,
+				null,
+				new TaskProgressSnapshot(2, 2),
+				TaskStep.MINE_TARGET,
+				TaskOwnership.TASK_RUNTIME,
+				"planner_response",
+				null,
+				"collect_logs",
+				LedgerStepKind.COLLECT_RESOURCE,
+				StepExecutionResult.idle(),
+				200L
+			),
+			new MissionExecutionSnapshot(
+				new MissionSpec("mission-wood-1", MissionType.COLLECT_RESOURCE, "Collect 4 wood logs"),
+				ledger,
+				null,
+				new WorldEvidence(Map.of(ai.moeru.airicraft.agent.tasks.TaskResourceKind.WOOD_LOGS, 2), Map.of("minecraft:oak_log", 3), "minecraft:overworld", 0, 64, 0, null, 200L),
+				new StepExecutionResult("collect_logs", StepExecutionStatus.RUNNING, null, Map.of(), Map.of(), 200L),
+				TaskExecutionSnapshot.idle()
+			),
+			"Bob",
+			"status?",
+			null
+		));
+
+		assertTrue(conversation.messages().stream().anyMatch(message -> message.content().contains("Active job: Active job COLLECT_RESOURCE")));
+		assertTrue(conversation.messages().stream().anyMatch(message -> message.content().contains("Active job progress: collected=2, remaining=2.")));
+		assertTrue(conversation.messages().stream().anyMatch(message -> message.content().contains("Active job evidence snapshot:")));
+		assertTrue(conversation.messages().stream().anyMatch(message -> message.content().contains("Compatibility ledger snapshot:")));
+		assertTrue(conversation.messages().stream().anyMatch(message -> message.content().contains("Last step result:")));
+		assertTrue(conversation.messages().stream().anyMatch(message -> message.content().contains("Compatibility history summary:")));
+	}
+
+	@Test
 	void compactionConversationAppendsTaskInstructionAtTail() {
 		Clock clock = Clock.fixed(Instant.ofEpochMilli(1_000L), ZoneId.of("Asia/Taipei"));
 		PlannerContextAggregator aggregator = new PlannerContextAggregator(clock, 65_536, PlannerVisionMode.EXTERNAL_SUMMARY);
 
-		aggregator.buildPlannerConversation(requestAt(1_000L, "Alice", "@agent hi"));
+		PlannerContextSnapshot initialSnapshot = freezeSnapshot(aggregator, requestAt(1_000L, "Alice", "@agent hi"));
+		aggregator.commitAcceptedTriggerBatch(initialSnapshot);
 		aggregator.recordUsage(new LlmUsageSnapshot(70_000, 200, 70_200));
 
 		assertTrue(aggregator.compactionPending());
@@ -92,8 +283,61 @@ class PlannerContextAggregatorTest {
 		));
 
 		assertFalse(aggregator.compactionPending());
-		LlmConversation afterCheckpoint = aggregator.buildPlannerConversation(requestAt(32 * 60_000L, "Alice", "@agent status"));
+		LlmConversation afterCheckpoint = freezeSnapshot(aggregator, requestAt(32 * 60_000L, "Alice", "@agent status")).plannerConversation();
 		assertEquals(LlmMessageKind.CHECKPOINT, afterCheckpoint.messages().get(1).kind());
+	}
+
+	@Test
+	void acceptedAssistantHistoryIsRenderedWithoutFrozenRelativeTimeText() {
+		MutableClock clock = new MutableClock(Instant.ofEpochMilli(1_000L), ZoneId.of("Asia/Taipei"));
+		PlannerContextAggregator aggregator = new PlannerContextAggregator(clock, 65_536, PlannerVisionMode.EXTERNAL_SUMMARY);
+
+		PlannerContextSnapshot firstSnapshot = freezeSnapshot(aggregator, requestAt(1_000L, "Alice", "@agent hi"));
+		aggregator.commitAcceptedTriggerBatch(firstSnapshot);
+		aggregator.recordAgentTurn(new ai.moeru.airicraft.agent.dialogue.DialogueTurn("agent", "On it.", 20L, 1_000L));
+
+		clock.advanceMillis(120_000L);
+		LlmConversation laterConversation = freezeSnapshot(aggregator, requestAt(clock.millis(), "Alice", "@agent status")).plannerConversation();
+
+		assertTrue(laterConversation.messages().stream().anyMatch(message ->
+			"assistant".equals(message.role()) && "On it.".equals(message.content())
+		));
+		assertFalse(laterConversation.messages().stream().anyMatch(message -> message.content().contains("Agent replied just now")));
+	}
+
+	@Test
+	void acceptedAssistantHistoryRetainsRawAssistantContentOverride() {
+		MutableClock clock = new MutableClock(Instant.ofEpochMilli(1_000L), ZoneId.of("Asia/Taipei"));
+		PlannerContextAggregator aggregator = new PlannerContextAggregator(clock, 65_536, PlannerVisionMode.EXTERNAL_SUMMARY);
+
+		PlannerContextSnapshot firstSnapshot = freezeSnapshot(aggregator, requestAt(1_000L, "Alice", "@agent hi"));
+		aggregator.commitAcceptedTriggerBatch(firstSnapshot);
+		aggregator.recordAgentTurn(
+			new ai.moeru.airicraft.agent.dialogue.DialogueTurn("agent", "On it.", 20L, 1_000L),
+			JsonParser.parseString("""
+				[
+				  {
+				    "type": "reasoning",
+				    "text": "Think before responding.",
+				    "thought": true,
+				    "thought_signature": "sig-123"
+				  },
+				  {
+				    "type": "text",
+				    "text": "{\\"replyText\\":\\"On it.\\",\\"intent\\":{\\"type\\":\\"reply_only\\"},\\"toolRequest\\":null}"
+				  }
+				]
+				""")
+		);
+
+		LlmConversation laterConversation = freezeSnapshot(aggregator, requestAt(clock.millis() + 1_000L, "Alice", "@agent status")).plannerConversation();
+		LlmChatMessage assistantMessage = laterConversation.messages().stream()
+			.filter(message -> "assistant".equals(message.role()))
+			.findFirst()
+			.orElseThrow();
+
+		assertEquals("On it.", assistantMessage.content());
+		assertTrue(assistantMessage.rawContentOverride().isJsonArray());
 	}
 
 	private static PlannerRequest requestAt(long timestampMs, String sender, String message) {
@@ -103,9 +347,88 @@ class PlannerContextAggregatorTest {
 			SessionMode.OUT_OF_WORLD,
 			null,
 			null,
+			null,
+			null,
 			sender,
 			message,
 			null
 		);
+	}
+
+	private static void recordEvents(PlannerContextAggregator aggregator, long anchorTimeMs, List<SemanticEvent> events) {
+		aggregator.recordObservedEvents(
+			new SemanticEventQueryResult(
+				events.isEmpty() ? 0L : events.getFirst().seqNo(),
+				events.isEmpty() ? 0L : events.getLast().seqNo(),
+				false,
+				events
+			)
+		);
+	}
+
+	private static SemanticEvent damageEvent(long seqNo, long tick, long timestampMs, float amount, float healthAfter) {
+		return new SemanticEvent(seqNo, tick, timestampMs, "combat.damage_taken", Map.of(
+			"actor", "self",
+			"amount", amount,
+			"healthBefore", healthAfter + amount,
+			"healthAfter", healthAfter,
+			"fatal", false,
+			"damageTypeId", "minecraft:mob_attack",
+			"attackerName", "Zombie",
+			"attackerEntityTypeId", "minecraft:zombie",
+			"directSourceEntityTypeId", "minecraft:zombie"
+		));
+	}
+
+	private static PlannerContextSnapshot freezeSnapshot(PlannerContextAggregator aggregator, PlannerRequest request) {
+		if (request.triggerBatch() != null) {
+			for (PlannerTrigger trigger : request.triggerBatch().triggers()) {
+				aggregator.enqueueTrigger(trigger);
+			}
+		}
+		return aggregator.freezePlannerSnapshot(request);
+	}
+
+	private static int indexContaining(List<LlmChatMessage> messages, String fragment) {
+		for (int index = 0; index < messages.size(); index++) {
+			if (messages.get(index).content().contains(fragment)) {
+				return index;
+			}
+		}
+		return -1;
+	}
+
+	private static final class MutableClock extends Clock {
+		private Instant instant;
+		private final ZoneId zoneId;
+
+		private MutableClock(Instant instant, ZoneId zoneId) {
+			this.instant = instant;
+			this.zoneId = zoneId;
+		}
+
+		@Override
+		public ZoneId getZone() {
+			return zoneId;
+		}
+
+		@Override
+		public Clock withZone(ZoneId zone) {
+			return new MutableClock(instant, zone);
+		}
+
+		@Override
+		public Instant instant() {
+			return instant;
+		}
+
+		private void advanceMillis(long millis) {
+			instant = instant.plusMillis(millis);
+		}
+
+		@Override
+		public long millis() {
+			return instant.toEpochMilli();
+		}
 	}
 }

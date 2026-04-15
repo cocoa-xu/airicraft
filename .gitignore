@@ -48,3 +48,5 @@ replay_*.log
 legacy_code_for_ref/
 
 logs/
+mappings/
+.worktrees/
