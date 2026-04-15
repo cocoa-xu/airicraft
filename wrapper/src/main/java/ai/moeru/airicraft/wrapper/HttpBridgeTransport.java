@@ -18,6 +18,7 @@ import java.util.Map;
 final class HttpBridgeTransport implements MinecraftTransport {
 	private static final Duration DEFAULT_REQUEST_TIMEOUT = Duration.ofSeconds(2);
 	private static final Duration JOIN_REQUEST_TIMEOUT = Duration.ofSeconds(15);
+	private static final Duration RELOAD_REQUEST_TIMEOUT = Duration.ofSeconds(10);
 	private static final Duration SCREENSHOT_REQUEST_TIMEOUT = Duration.ofSeconds(10);
 	private static final Duration VISION_REQUEST_TIMEOUT = Duration.ofSeconds(20);
 	private static final Duration DEBUG_COMPACTION_REQUEST_TIMEOUT = Duration.ofSeconds(45);
@@ -44,6 +45,11 @@ final class HttpBridgeTransport implements MinecraftTransport {
 				"message", "Minecraft bridge is not active"
 			);
 		}
+	}
+
+	@Override
+	public Map<String, Object> reload() {
+		return send("POST", "/v1/reload", null);
 	}
 
 	@Override
@@ -413,6 +419,7 @@ final class HttpBridgeTransport implements MinecraftTransport {
 
 	private static Duration requestTimeout(String path) {
 		return switch (path) {
+			case "/v1/reload" -> RELOAD_REQUEST_TIMEOUT;
 			case "/v1/camera/screenshot" -> SCREENSHOT_REQUEST_TIMEOUT;
 			case "/v1/vision/describe" -> VISION_REQUEST_TIMEOUT;
 			case "/v1/worlds/join", "/v1/servers/join" -> JOIN_REQUEST_TIMEOUT;

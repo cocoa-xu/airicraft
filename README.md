@@ -216,9 +216,10 @@ If all are false, only non-content structural tracing metadata is sent.
 ### 6) Reload workflow
 
 1. Start Minecraft or keep existing session.
-2. Ensure `airicraft/config/agent.yml` has the desired `observability` block.
-3. In-game mod/runtime picks up file changes when the mod is restarted.
-4. Confirm traces appear in your OTLP collector/Weave dashboard.
+2. Edit `config/airicraft/airicraft.yml` and/or `config/airicraft/agent.yml`.
+3. Run `airicraft reload` from the wrapper CLI, or `/airicraft reload` in-game.
+4. The runtime reloads config live without restarting Minecraft; active agent state is reset during reload.
+5. Confirm traces appear in your OTLP collector/Weave dashboard.
 
 ## Troubleshooting
 

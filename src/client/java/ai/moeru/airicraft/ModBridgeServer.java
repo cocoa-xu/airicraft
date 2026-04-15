@@ -73,9 +73,10 @@ public final class ModBridgeServer {
 		"results"
 	);
 
-	private final HighlightManager highlightManager;
-	private final EmbodiedAgentRuntime agentRuntime;
-	private final FirstPersonScreenshotService screenshotService;
+	private final Supplier<HighlightManager> highlightManagerSupplier;
+	private final Supplier<EmbodiedAgentRuntime> agentRuntimeSupplier;
+	private final Supplier<FirstPersonScreenshotService> screenshotServiceSupplier;
+	private final Supplier<ClientRuntimeController.ReloadResult> reloadSupplier;
 	private final SingleplayerWorldService singleplayerWorldService = new SingleplayerWorldService();
 	private final SavedServerService savedServerService = new SavedServerService();
 	private final PlayerViewService playerViewService = new PlayerViewService();
@@ -84,13 +85,15 @@ public final class ModBridgeServer {
 	private volatile String token;
 
 	public ModBridgeServer(
-		HighlightManager highlightManager,
-		EmbodiedAgentRuntime agentRuntime,
-		FirstPersonScreenshotService screenshotService
+		Supplier<HighlightManager> highlightManagerSupplier,
+		Supplier<EmbodiedAgentRuntime> agentRuntimeSupplier,
+		Supplier<FirstPersonScreenshotService> screenshotServiceSupplier,
+		Supplier<ClientRuntimeController.ReloadResult> reloadSupplier
 	) {
-		this.highlightManager = highlightManager;
-		this.agentRuntime = agentRuntime;
-		this.screenshotService = screenshotService;
+		this.highlightManagerSupplier = Objects.requireNonNull(highlightManagerSupplier, "highlightManagerSupplier");
+		this.agentRuntimeSupplier = Objects.requireNonNull(agentRuntimeSupplier, "agentRuntimeSupplier");
+		this.screenshotServiceSupplier = Objects.requireNonNull(screenshotServiceSupplier, "screenshotServiceSupplier");
+		this.reloadSupplier = Objects.requireNonNull(reloadSupplier, "reloadSupplier");
 	}
 
 	public synchronized void start() {
@@ -105,6 +108,7 @@ public final class ModBridgeServer {
 			httpServer.setExecutor(Executors.newCachedThreadPool());
 			token = generateToken();
 			httpServer.createContext("/v1/status", exchange -> handleJson(exchange, this::createStatusResponse));
+			httpServer.createContext("/v1/reload", this::handleReload);
 			httpServer.createContext("/v1/worlds", this::handleWorlds);
 			httpServer.createContext("/v1/worlds/join", this::handleJoinWorld);
 			httpServer.createContext("/v1/servers", this::handleServers);
@@ -264,7 +268,7 @@ public final class ModBridgeServer {
 			CompletableFuture<FirstPersonScreenshotService.CapturedScreenshot> captureFuture = onClientThread(() -> {
 				var client = getClient();
 				ensureWorldLoaded(client);
-				return screenshotService.requestCapture(client);
+				return screenshotService().requestCapture(client);
 			});
 			writeJson(exchange, 200, cameraScreenshotPayload(awaitCameraScreenshot(captureFuture)));
 		}
@@ -283,16 +287,20 @@ public final class ModBridgeServer {
 			CompletableFuture<FirstPersonScreenshotService.CapturedScreenshot> captureFuture = onClientThread(() -> {
 				var client = getClient();
 				ensureWorldLoaded(client);
-				return screenshotService.requestCapture(client);
+				return screenshotService().requestCapture(client);
 			});
 			FirstPersonScreenshotService.CapturedScreenshot screenshot = awaitCameraScreenshot(captureFuture);
 			try {
-				return visionDescribePayload(agentRuntime.describeCapturedView(screenshot, prompt));
+				return visionDescribePayload(agentRuntime().describeCapturedView(screenshot, prompt));
 			}
 			catch (LlmBackendException exception) {
 				throw visionBridgeException(exception);
 			}
 		});
+	}
+
+	private void handleReload(HttpExchange exchange) throws IOException {
+		handleJsonBody(exchange, "POST", Object.class, request -> onClientThread(() -> reloadSupplier.get().toPayload()));
 	}
 
 	private void handleHighlights(HttpExchange exchange) throws IOException {
@@ -302,7 +310,7 @@ public final class ModBridgeServer {
 		}
 
 		if ("GET".equalsIgnoreCase(exchange.getRequestMethod())) {
-			var payload = onClientThread(() -> Map.of("highlights", highlightManager.list()));
+			var payload = onClientThread(() -> Map.of("highlights", highlightManager().list()));
 			writeJson(exchange, 200, payload);
 			return;
 		}
@@ -329,7 +337,7 @@ public final class ModBridgeServer {
 				int color = parseColor(request.color());
 				Long durationMs = safeDurationMs(request.durationMs());
 				if ("region".equals(kind)) {
-					return highlightManager.addRegion(
+					return highlightManager().addRegion(
 						requiredBlockPos(request.x1(), request.y1(), request.z1(), "x1/y1/z1"),
 						requiredBlockPos(request.x2(), request.y2(), request.z2(), "x2/y2/z2"),
 						color,
@@ -338,7 +346,7 @@ public final class ModBridgeServer {
 					);
 				}
 
-				return highlightManager.addBlock(
+				return highlightManager().addBlock(
 					requiredBlockPos(request.x(), request.y(), request.z(), "x/y/z"),
 					color,
 					durationMs,
@@ -356,11 +364,11 @@ public final class ModBridgeServer {
 				var client = getClient();
 				ensureWorldLoaded(client);
 				if (highlightId == null || highlightId.isBlank()) {
-					int clearedCount = highlightManager.clear();
+					int clearedCount = highlightManager().clear();
 					return Map.of("cleared", true, "clearedCount", clearedCount);
 				}
 
-				boolean cleared = highlightManager.clearById(highlightId);
+				boolean cleared = highlightManager().clearById(highlightId);
 				if (!cleared) {
 					throw new BridgeUnavailableException("highlight_not_found", "Highlight not found: " + highlightId);
 				}
@@ -381,7 +389,7 @@ public final class ModBridgeServer {
 			}
 
 			return onClientThread(() -> {
-				boolean accepted = agentRuntime.startVerification(request.scenario());
+				boolean accepted = agentRuntime().startVerification(request.scenario());
 				if (!accepted) {
 					throw new BridgeUnavailableException("unknown_scenario", "Unknown verification scenario: " + request.scenario());
 				}
@@ -401,7 +409,7 @@ public final class ModBridgeServer {
 				throw new BridgeUnavailableException("invalid_request", "x, y, and z must be finite numbers");
 			}
 			return onClientThread(() -> verificationPlayerActionResponse(
-				agentRuntime.verificationTeleportPlayer(request.x(), request.y(), request.z()),
+				agentRuntime().verificationTeleportPlayer(request.x(), request.y(), request.z()),
 				"teleported",
 				true
 			));
@@ -414,7 +422,7 @@ public final class ModBridgeServer {
 				throw new BridgeUnavailableException("invalid_request", "x, y, and z must be finite numbers");
 			}
 			return onClientThread(() -> verificationPlayerActionResponse(
-				agentRuntime.verificationSetPlayerVelocity(request.x(), request.y(), request.z()),
+				agentRuntime().verificationSetPlayerVelocity(request.x(), request.y(), request.z()),
 				"applied",
 				true
 			));
@@ -427,7 +435,7 @@ public final class ModBridgeServer {
 				throw new BridgeUnavailableException("invalid_request", "Missing mode");
 			}
 			return onClientThread(() -> verificationPlayerActionResponse(
-				agentRuntime.verificationSetGameMode(request.mode()),
+				agentRuntime().verificationSetGameMode(request.mode()),
 				"changed",
 				true
 			));
@@ -436,7 +444,7 @@ public final class ModBridgeServer {
 
 	private void handleVerificationPlayerRespawn(HttpExchange exchange) throws IOException {
 		handleJsonBody(exchange, "POST", Object.class, request -> {
-			onClientThread(() -> agentRuntime.verificationRequestRespawn());
+			onClientThread(() -> agentRuntime().verificationRequestRespawn());
 			long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(VERIFICATION_RESPAWN_TIMEOUT_MILLIS);
 			while (System.nanoTime() < deadline) {
 				Map<String, Object> response = onClientThread(() -> {
@@ -444,7 +452,7 @@ public final class ModBridgeServer {
 					if (client.currentScreen != null && "DeathScreen".equals(client.currentScreen.getClass().getSimpleName())) {
 						return null;
 					}
-					VerificationPlayerProbe probe = agentRuntime.verificationPlayerProbe();
+					VerificationPlayerProbe probe = agentRuntime().verificationPlayerProbe();
 					LinkedHashMap<String, Object> payload = verificationPlayerActionResponse(probe, "respawned", true);
 					payload.put("currentScreen", currentScreenName(client));
 					return payload;
@@ -470,11 +478,11 @@ public final class ModBridgeServer {
 				throw new BridgeUnavailableException("invalid_request", "Missing command");
 			}
 			return onClientThread(() -> {
-				VerificationPlayerProbe probe = agentRuntime.verificationRunCommand(request.command());
+				VerificationPlayerProbe probe = agentRuntime().verificationRunCommand(request.command());
 				LinkedHashMap<String, Object> response = new LinkedHashMap<>();
 				response.put("available", true);
-				response.put("sessionMode", agentRuntime.sessionSnapshot().mode().name());
-				response.put("worldLoaded", agentRuntime.sessionSnapshot().worldLoaded());
+				response.put("sessionMode", agentRuntime().sessionSnapshot().mode().name());
+				response.put("worldLoaded", agentRuntime().sessionSnapshot().worldLoaded());
 				response.put("executed", true);
 				response.put("command", request.command().trim());
 				response.putAll(verificationPlayerPayload(probe));
@@ -486,7 +494,7 @@ public final class ModBridgeServer {
 	private void handleAgentOpenLan(HttpExchange exchange) throws IOException {
 		handleJsonBody(exchange, "POST", Object.class, request -> {
 			try {
-				return onClientThread(agentRuntime::openLan);
+				return onClientThread(() -> agentRuntime().openLan());
 			}
 			catch (LanHostingService.LanHostingException exception) {
 				throw new BridgeUnavailableException(exception.code(), exception.getMessage());
@@ -499,10 +507,10 @@ public final class ModBridgeServer {
 			boolean wait = request == null || request.waitValue() == null || request.waitValue();
 			long timeoutMillis = requestedDebugCompactionTimeoutMillis(request == null ? null : request.timeoutMs());
 			boolean started = onClientThread(() -> {
-				if (!agentRuntime.llmAvailable()) {
+				if (!agentRuntime().llmAvailable()) {
 					throw new BridgeUnavailableException("planner_unavailable", "Planner LLM is not configured");
 				}
-				if (!agentRuntime.startDebugCompaction()) {
+				if (!agentRuntime().startDebugCompaction()) {
 					throw new BridgeUnavailableException("planner_busy", "Planner is busy with another request");
 				}
 				return true;
@@ -514,8 +522,8 @@ public final class ModBridgeServer {
 			long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
 			while (System.nanoTime() < deadline) {
 				var snapshot = onClientThread(() -> {
-					agentRuntime.pollDebugCompaction();
-					return agentRuntime.plannerDebugSnapshot();
+					agentRuntime().pollDebugCompaction();
+					return agentRuntime().plannerDebugSnapshot();
 				});
 				if (!snapshot.compactionInFlight() && snapshot.lastCompactionResult() != null) {
 					if (!snapshot.lastCompactionResult().succeeded()) {
@@ -541,7 +549,7 @@ public final class ModBridgeServer {
 	private void handleAgentEventPolicyClear(HttpExchange exchange) throws IOException {
 		handleJsonBody(exchange, "POST", Object.class, request -> {
 			return onClientThread(() -> {
-				agentRuntime.clearEventPolicy();
+				agentRuntime().clearEventPolicy();
 				return createAgentEventPolicyPayload();
 			});
 		});
@@ -557,17 +565,17 @@ public final class ModBridgeServer {
 				ensureWorldLoaded(client);
 				String senderName = nonEmpty(request.senderName(), defaultDebugSender(client));
 				String message = request.message().trim();
-				agentRuntime.onChatReceived(senderName, message);
+				agentRuntime().onChatReceived(senderName, message);
 
 				Map<String, Object> payload = new LinkedHashMap<>();
 				payload.put("available", true);
 				payload.put("accepted", true);
 				payload.put("senderName", senderName);
 				payload.put("message", message);
-				payload.put("task", agentRuntime.taskSnapshot());
-				payload.put("taskExecution", agentRuntime.taskExecutionSnapshot());
-				payload.put("lastDialogueResponse", agentRuntime.lastDialogueResponse().orElse(null));
-				payload.put("sessionMode", agentRuntime.sessionSnapshot().mode().name());
+				payload.put("task", agentRuntime().taskSnapshot());
+				payload.put("taskExecution", agentRuntime().taskExecutionSnapshot());
+				payload.put("lastDialogueResponse", agentRuntime().lastDialogueResponse().orElse(null));
+				payload.put("sessionMode", agentRuntime().sessionSnapshot().mode().name());
 				return payload;
 			});
 		});
@@ -587,13 +595,13 @@ public final class ModBridgeServer {
 		}
 		if ("DELETE".equalsIgnoreCase(method)) {
 			Map<String, Object> response = onClientThread(() -> {
-				var task = agentRuntime.cancelTask("bridge_debug_cancel");
+				var task = agentRuntime().cancelTask("bridge_debug_cancel");
 				Map<String, Object> payload = new LinkedHashMap<>();
 				payload.put("available", true);
 				payload.put("cancelled", true);
 				payload.put("task", task);
-				payload.put("taskExecution", agentRuntime.taskExecutionSnapshot());
-				payload.put("missionExecution", agentRuntime.missionExecutionSnapshot());
+				payload.put("taskExecution", agentRuntime().taskExecutionSnapshot());
+				payload.put("missionExecution", agentRuntime().missionExecutionSnapshot());
 				return payload;
 			});
 			writeJson(exchange, 200, response);
@@ -614,12 +622,12 @@ public final class ModBridgeServer {
 					throw new BridgeUnavailableException("invalid_request", "Malformed mission ledger payload");
 				}
 				Map<String, Object> response = onClientThread(() -> {
-					var task = agentRuntime.submitMissionLedger(ledger, "bridge_debug_mission");
+					var task = agentRuntime().submitMissionLedger(ledger, "bridge_debug_mission");
 					Map<String, Object> payload = new LinkedHashMap<>();
 					payload.put("available", true);
 					payload.put("task", task);
-					payload.put("taskExecution", agentRuntime.taskExecutionSnapshot());
-					payload.put("missionExecution", agentRuntime.missionExecutionSnapshot());
+					payload.put("taskExecution", agentRuntime().taskExecutionSnapshot());
+					payload.put("missionExecution", agentRuntime().missionExecutionSnapshot());
 					return payload;
 				});
 				writeJson(exchange, 200, response);
@@ -635,15 +643,15 @@ public final class ModBridgeServer {
 				throw new BridgeUnavailableException("invalid_request", "quantity must be positive");
 			}
 			Map<String, Object> response = onClientThread(() -> {
-				var task = agentRuntime.submitTask(
+				var task = agentRuntime().submitTask(
 					new TaskSpec(taskType, resourceKind, taskRequest.quantity().intValue()),
 					"bridge_debug"
 				);
 				Map<String, Object> payload = new LinkedHashMap<>();
 				payload.put("available", true);
 				payload.put("task", task);
-				payload.put("taskExecution", agentRuntime.taskExecutionSnapshot());
-				payload.put("missionExecution", agentRuntime.missionExecutionSnapshot());
+				payload.put("taskExecution", agentRuntime().taskExecutionSnapshot());
+				payload.put("missionExecution", agentRuntime().missionExecutionSnapshot());
 				return payload;
 			});
 			writeJson(exchange, 200, response);
@@ -729,12 +737,12 @@ public final class ModBridgeServer {
 			return captureFuture.get(SCREENSHOT_CAPTURE_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS);
 		}
 		catch (TimeoutException exception) {
-			screenshotService.failActiveCapture("capture_timeout", "Screenshot capture timed out");
+			screenshotService().failActiveCapture("capture_timeout", "Screenshot capture timed out");
 			throw new BridgeUnavailableException("capture_timeout", "Screenshot capture timed out");
 		}
 		catch (InterruptedException exception) {
 			Thread.currentThread().interrupt();
-			screenshotService.failActiveCapture("capture_failed", "Screenshot capture was interrupted");
+			screenshotService().failActiveCapture("capture_failed", "Screenshot capture was interrupted");
 			throw new BridgeUnavailableException("capture_failed", "Screenshot capture was interrupted");
 		}
 		catch (ExecutionException exception) {
@@ -778,8 +786,8 @@ public final class ModBridgeServer {
 
 	private Object createAgentStatusResponse() {
 		return onClientThread(() -> {
-			var snapshot = agentRuntime.snapshot();
-			var plannerSnapshot = agentRuntime.plannerDebugSnapshot();
+			var snapshot = agentRuntime().snapshot();
+			var plannerSnapshot = agentRuntime().plannerDebugSnapshot();
 			Map<String, Object> response = new LinkedHashMap<>();
 			response.put("available", true);
 			response.put("bridgeAvailable", true);
@@ -790,13 +798,13 @@ public final class ModBridgeServer {
 			response.put("task", snapshot.task());
 			response.put("taskExecution", snapshot.taskExecution());
 			response.put("missionExecution", snapshot.missionExecution());
-			response.put("activeJob", agentRuntime.activeJob());
-			response.put("llmAvailable", agentRuntime.llmAvailable());
-			response.put("visionAvailable", agentRuntime.visionAvailable());
+			response.put("activeJob", agentRuntime().activeJob());
+			response.put("llmAvailable", agentRuntime().llmAvailable());
+			response.put("visionAvailable", agentRuntime().visionAvailable());
 			response.put("plannerVisionMode", plannerSnapshot.plannerVisionMode());
-			response.put("observability", agentRuntime.observabilityDebugSnapshot());
-			response.put("degraded", agentRuntime.isDegraded());
-			response.put("plannerJournal", agentRuntime.plannerShellJournal());
+			response.put("observability", agentRuntime().observabilityDebugSnapshot());
+			response.put("degraded", agentRuntime().isDegraded());
+			response.put("plannerJournal", agentRuntime().plannerShellJournal());
 			response.put("eventPolicy", eventPolicySummaryPayload());
 			response.put("verification", snapshot.verification());
 			return response;
@@ -807,8 +815,8 @@ public final class ModBridgeServer {
 		return onClientThread(() -> {
 			Map<String, Object> response = new LinkedHashMap<>();
 			response.put("available", true);
-			response.put("scenarios", agentRuntime.verificationScenarioNames());
-			response.put("report", agentRuntime.verificationReport());
+			response.put("scenarios", agentRuntime().verificationScenarioNames());
+			response.put("report", agentRuntime().verificationReport());
 			return response;
 		});
 	}
@@ -816,9 +824,9 @@ public final class ModBridgeServer {
 	private Object createVerificationStatusResponse() {
 		return onClientThread(() -> {
 			Map<String, Object> response = new LinkedHashMap<>();
-			response.put("available", agentRuntime.verificationAvailable());
-			response.put("sessionMode", agentRuntime.sessionSnapshot().mode().name());
-			response.put("worldLoaded", agentRuntime.sessionSnapshot().worldLoaded());
+			response.put("available", agentRuntime().verificationAvailable());
+			response.put("sessionMode", agentRuntime().sessionSnapshot().mode().name());
+			response.put("worldLoaded", agentRuntime().sessionSnapshot().worldLoaded());
 			response.put("capabilities", VERIFICATION_CAPABILITIES);
 			return response;
 		});
@@ -826,11 +834,11 @@ public final class ModBridgeServer {
 
 	private Object createVerificationPlayerResponse() {
 		return onClientThread(() -> {
-			VerificationPlayerProbe probe = agentRuntime.verificationPlayerProbe();
+			VerificationPlayerProbe probe = agentRuntime().verificationPlayerProbe();
 			LinkedHashMap<String, Object> response = new LinkedHashMap<>();
 			response.put("available", true);
-			response.put("sessionMode", agentRuntime.sessionSnapshot().mode().name());
-			response.put("worldLoaded", agentRuntime.sessionSnapshot().worldLoaded());
+			response.put("sessionMode", agentRuntime().sessionSnapshot().mode().name());
+			response.put("worldLoaded", agentRuntime().sessionSnapshot().worldLoaded());
 			response.putAll(verificationPlayerPayload(probe));
 			return response;
 		});
@@ -840,11 +848,11 @@ public final class ModBridgeServer {
 		return onClientThread(() -> {
 			Map<String, Object> response = new LinkedHashMap<>();
 			response.put("available", true);
-			response.put("session", agentRuntime.sessionSnapshot());
-			response.put("lanPublished", agentRuntime.sessionSnapshot().lanPublished());
-			response.put("lanPort", agentRuntime.sessionSnapshot().lanPort());
-			response.put("primaryInteractionPlayer", agentRuntime.primaryInteractionPlayer().orElse(null));
-			response.put("nearbyPlayers", agentRuntime.nearbyPlayers());
+			response.put("session", agentRuntime().sessionSnapshot());
+			response.put("lanPublished", agentRuntime().sessionSnapshot().lanPublished());
+			response.put("lanPort", agentRuntime().sessionSnapshot().lanPort());
+			response.put("primaryInteractionPlayer", agentRuntime().primaryInteractionPlayer().orElse(null));
+			response.put("nearbyPlayers", agentRuntime().nearbyPlayers());
 			return response;
 		});
 	}
@@ -854,7 +862,7 @@ public final class ModBridgeServer {
 		long since = getLongQuery(exchange, "since", defaultSince);
 		Long sinceSeqNo = since == defaultSince ? null : since;
 		return onClientThread(() -> {
-			var result = agentRuntime.recentEvents(sinceSeqNo);
+			var result = agentRuntime().recentEvents(sinceSeqNo);
 			Map<String, Object> response = new LinkedHashMap<>();
 			response.put("available", true);
 			response.put("oldestSeqNo", result.oldestSeqNo());
@@ -869,12 +877,12 @@ public final class ModBridgeServer {
 		return onClientThread(() -> {
 			Map<String, Object> response = new LinkedHashMap<>();
 			response.put("available", true);
-			response.put("activeGoal", agentRuntime.activeGoal().orElse(null));
-			response.put("activeJob", agentRuntime.activeJob());
-			response.put("task", agentRuntime.taskSnapshot());
-			response.put("taskExecution", agentRuntime.taskExecutionSnapshot());
-			response.put("missionExecution", agentRuntime.missionExecutionSnapshot());
-			response.put("lastDialogueResponse", agentRuntime.lastDialogueResponse().orElse(null));
+			response.put("activeGoal", agentRuntime().activeGoal().orElse(null));
+			response.put("activeJob", agentRuntime().activeJob());
+			response.put("task", agentRuntime().taskSnapshot());
+			response.put("taskExecution", agentRuntime().taskExecutionSnapshot());
+			response.put("missionExecution", agentRuntime().missionExecutionSnapshot());
+			response.put("lastDialogueResponse", agentRuntime().lastDialogueResponse().orElse(null));
 			return response;
 		});
 	}
@@ -883,7 +891,7 @@ public final class ModBridgeServer {
 		return onClientThread(() -> {
 			Map<String, Object> response = new LinkedHashMap<>();
 			response.put("available", true);
-			response.put("tree", agentRuntime.behaviorTreeSnapshot());
+			response.put("tree", agentRuntime().behaviorTreeSnapshot());
 			return response;
 		});
 	}
@@ -892,12 +900,12 @@ public final class ModBridgeServer {
 		return onClientThread(() -> {
 			Map<String, Object> response = new LinkedHashMap<>();
 			response.put("available", true);
-			response.put("dialogue", agentRuntime.dialogueSnapshot());
-			response.put("conversation", agentRuntime.plannerConversationDebugSnapshot());
-			response.put("canonicalConversation", agentRuntime.plannerCanonicalConversationDebugSnapshot());
-			response.put("plannerJournal", agentRuntime.plannerShellJournal());
-			response.put("lastChatTick", agentRuntime.lastChatTick());
-			response.put("lastChatText", agentRuntime.lastChatText());
+			response.put("dialogue", agentRuntime().dialogueSnapshot());
+			response.put("conversation", agentRuntime().plannerConversationDebugSnapshot());
+			response.put("canonicalConversation", agentRuntime().plannerCanonicalConversationDebugSnapshot());
+			response.put("plannerJournal", agentRuntime().plannerShellJournal());
+			response.put("lastChatTick", agentRuntime().lastChatTick());
+			response.put("lastChatText", agentRuntime().lastChatText());
 			return response;
 		});
 	}
@@ -906,14 +914,14 @@ public final class ModBridgeServer {
 		return onClientThread(() -> {
 			Map<String, Object> response = new LinkedHashMap<>();
 			response.put("available", true);
-			response.put("planner", agentRuntime.plannerDebugSnapshot());
-			response.put("plannerJournal", agentRuntime.plannerShellJournal());
-			response.put("contextExcerpt", agentRuntime.plannerContextExcerpt());
-			response.put("activeJob", agentRuntime.activeJob());
+			response.put("planner", agentRuntime().plannerDebugSnapshot());
+			response.put("plannerJournal", agentRuntime().plannerShellJournal());
+			response.put("contextExcerpt", agentRuntime().plannerContextExcerpt());
+			response.put("activeJob", agentRuntime().activeJob());
 			response.put("eventPolicy", eventPolicySummaryPayload());
-			response.put("task", agentRuntime.taskSnapshot());
-			response.put("taskExecution", agentRuntime.taskExecutionSnapshot());
-			response.put("missionExecution", agentRuntime.missionExecutionSnapshot());
+			response.put("task", agentRuntime().taskSnapshot());
+			response.put("taskExecution", agentRuntime().taskExecutionSnapshot());
+			response.put("missionExecution", agentRuntime().missionExecutionSnapshot());
 			return response;
 		});
 	}
@@ -922,15 +930,15 @@ public final class ModBridgeServer {
 		return onClientThread(() -> {
 			Map<String, Object> response = new LinkedHashMap<>();
 			response.put("available", true);
-			response.put("planner", agentRuntime.plannerDebugSnapshot());
-			response.put("dialogueState", agentRuntime.debugDialogueState());
-			response.put("conversation", agentRuntime.plannerConversationDebugSnapshot());
-			response.put("conversationSources", agentRuntime.debugConversationSources());
-			response.put("plannerAttempts", agentRuntime.debugPlannerAttempts());
-			response.put("taskProgressProbe", agentRuntime.debugCollectResourceState());
-			response.put("chatProbe", agentRuntime.debugChatState());
-			response.put("eventPipeline", agentRuntime.debugEventPipelineState());
-			response.put("timelineTail", agentRuntime.debugTimeline(null).entries());
+			response.put("planner", agentRuntime().plannerDebugSnapshot());
+			response.put("dialogueState", agentRuntime().debugDialogueState());
+			response.put("conversation", agentRuntime().plannerConversationDebugSnapshot());
+			response.put("conversationSources", agentRuntime().debugConversationSources());
+			response.put("plannerAttempts", agentRuntime().debugPlannerAttempts());
+			response.put("taskProgressProbe", agentRuntime().debugCollectResourceState());
+			response.put("chatProbe", agentRuntime().debugChatState());
+			response.put("eventPipeline", agentRuntime().debugEventPipelineState());
+			response.put("timelineTail", agentRuntime().debugTimeline(null).entries());
 			return response;
 		});
 	}
@@ -940,7 +948,7 @@ public final class ModBridgeServer {
 		long since = getLongQuery(exchange, "since", defaultSince);
 		Long sinceEntryId = since == defaultSince ? null : since;
 		return onClientThread(() -> {
-			var result = agentRuntime.debugTimeline(sinceEntryId);
+			var result = agentRuntime().debugTimeline(sinceEntryId);
 			Map<String, Object> response = new LinkedHashMap<>();
 			response.put("available", true);
 			response.put("oldestEntryId", result.oldestEntryId());
@@ -955,10 +963,10 @@ public final class ModBridgeServer {
 		return onClientThread(() -> {
 			Map<String, Object> response = new LinkedHashMap<>();
 			response.put("available", true);
-			response.put("activeJob", agentRuntime.activeJob());
-			response.put("task", agentRuntime.taskSnapshot());
-			response.put("taskExecution", agentRuntime.taskExecutionSnapshot());
-			response.put("missionExecution", agentRuntime.missionExecutionSnapshot());
+			response.put("activeJob", agentRuntime().activeJob());
+			response.put("task", agentRuntime().taskSnapshot());
+			response.put("taskExecution", agentRuntime().taskExecutionSnapshot());
+			response.put("missionExecution", agentRuntime().missionExecutionSnapshot());
 			return response;
 		});
 	}
@@ -967,10 +975,10 @@ public final class ModBridgeServer {
 		return onClientThread(() -> {
 			Map<String, Object> response = new LinkedHashMap<>();
 			response.put("available", true);
-			response.put("activeJob", agentRuntime.activeJob());
-			response.put("mission", agentRuntime.taskSnapshot().mission());
-			response.put("ledger", agentRuntime.missionExecutionSnapshot().ledger());
-			response.put("lastStepResult", agentRuntime.missionExecutionSnapshot().lastStepResult());
+			response.put("activeJob", agentRuntime().activeJob());
+			response.put("mission", agentRuntime().taskSnapshot().mission());
+			response.put("ledger", agentRuntime().missionExecutionSnapshot().ledger());
+			response.put("lastStepResult", agentRuntime().missionExecutionSnapshot().lastStepResult());
 			return response;
 		});
 	}
@@ -979,9 +987,9 @@ public final class ModBridgeServer {
 		return onClientThread(() -> {
 			Map<String, Object> response = new LinkedHashMap<>();
 			response.put("available", true);
-			response.put("activeJob", agentRuntime.activeJob());
-			response.put("evidence", agentRuntime.missionExecutionSnapshot().evidence());
-			response.put("task", agentRuntime.taskSnapshot());
+			response.put("activeJob", agentRuntime().activeJob());
+			response.put("evidence", agentRuntime().missionExecutionSnapshot().evidence());
+			response.put("task", agentRuntime().taskSnapshot());
 			return response;
 		});
 	}
@@ -990,9 +998,9 @@ public final class ModBridgeServer {
 		return onClientThread(() -> {
 			Map<String, Object> response = new LinkedHashMap<>();
 			response.put("available", true);
-			response.put("activeJob", agentRuntime.activeJob());
-			response.put("stepExecution", agentRuntime.missionExecutionSnapshot().lastStepResult());
-			response.put("taskExecution", agentRuntime.taskExecutionSnapshot());
+			response.put("activeJob", agentRuntime().activeJob());
+			response.put("stepExecution", agentRuntime().missionExecutionSnapshot().lastStepResult());
+			response.put("taskExecution", agentRuntime().taskExecutionSnapshot());
 			return response;
 		});
 	}
@@ -1004,21 +1012,21 @@ public final class ModBridgeServer {
 	private Map<String, Object> createAgentEventPolicyPayload() {
 		LinkedHashMap<String, Object> response = new LinkedHashMap<>();
 		response.put("available", true);
-		response.put("activeRuleCount", agentRuntime.activeEventPolicyRuleCount());
-		response.put("recentInterventionCount", agentRuntime.recentEventPolicyInterventionCount());
-		response.put("lastDecision", agentRuntime.lastEventPolicyDecision());
-		response.put("activeRules", agentRuntime.activeEventPolicyRules());
-		response.put("recentInterventions", agentRuntime.recentEventPolicyInterventions());
+		response.put("activeRuleCount", agentRuntime().activeEventPolicyRuleCount());
+		response.put("recentInterventionCount", agentRuntime().recentEventPolicyInterventionCount());
+		response.put("lastDecision", agentRuntime().lastEventPolicyDecision());
+		response.put("activeRules", agentRuntime().activeEventPolicyRules());
+		response.put("recentInterventions", agentRuntime().recentEventPolicyInterventions());
 		return response;
 	}
 
 	private Map<String, Object> eventPolicySummaryPayload() {
 		LinkedHashMap<String, Object> payload = new LinkedHashMap<>();
-		payload.put("activeRuleCount", agentRuntime.activeEventPolicyRuleCount());
-		payload.put("recentInterventionCount", agentRuntime.recentEventPolicyInterventionCount());
-		if (agentRuntime.lastEventPolicyDecision() != null) {
-			payload.put("lastMatchedRuleId", agentRuntime.lastEventPolicyDecision().matchedRuleId());
-			payload.put("lastMatchedEffect", agentRuntime.lastEventPolicyDecision().effect().name());
+		payload.put("activeRuleCount", agentRuntime().activeEventPolicyRuleCount());
+		payload.put("recentInterventionCount", agentRuntime().recentEventPolicyInterventionCount());
+		if (agentRuntime().lastEventPolicyDecision() != null) {
+			payload.put("lastMatchedRuleId", agentRuntime().lastEventPolicyDecision().matchedRuleId());
+			payload.put("lastMatchedEffect", agentRuntime().lastEventPolicyDecision().effect().name());
 		}
 		return payload;
 	}
@@ -1243,8 +1251,8 @@ public final class ModBridgeServer {
 		response.put("started", started);
 		response.put("completed", completed);
 		response.put("timeoutMs", timeoutMillis);
-		response.put("planner", agentRuntime.plannerDebugSnapshot());
-		response.put("plannerJournal", agentRuntime.plannerShellJournal());
+		response.put("planner", agentRuntime().plannerDebugSnapshot());
+		response.put("plannerJournal", agentRuntime().plannerShellJournal());
 		return response;
 	}
 
@@ -1459,8 +1467,8 @@ public final class ModBridgeServer {
 	) {
 		LinkedHashMap<String, Object> response = new LinkedHashMap<>();
 		response.put("available", true);
-		response.put("sessionMode", agentRuntime.sessionSnapshot().mode().name());
-		response.put("worldLoaded", agentRuntime.sessionSnapshot().worldLoaded());
+		response.put("sessionMode", agentRuntime().sessionSnapshot().mode().name());
+		response.put("worldLoaded", agentRuntime().sessionSnapshot().worldLoaded());
 		response.put(resultKey, resultValue);
 		response.putAll(verificationPlayerPayload(probe));
 		return response;
@@ -1489,6 +1497,18 @@ public final class ModBridgeServer {
 			throw new BridgeUnavailableException("invalid_request", "Missing coordinates: " + fields);
 		}
 		return new BlockPos(x, y, z);
+	}
+
+	private HighlightManager highlightManager() {
+		return Objects.requireNonNull(highlightManagerSupplier.get(), "highlightManager");
+	}
+
+	private EmbodiedAgentRuntime agentRuntime() {
+		return Objects.requireNonNull(agentRuntimeSupplier.get(), "agentRuntime");
+	}
+
+	private FirstPersonScreenshotService screenshotService() {
+		return Objects.requireNonNull(screenshotServiceSupplier.get(), "screenshotService");
 	}
 
 	private record HighlightRequest(

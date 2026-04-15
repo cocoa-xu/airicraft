@@ -24,6 +24,20 @@ public final class AiricraftConfigLoader {
 	}
 
 	public static AiricraftConfig load() {
+		try {
+			return loadInternal(false);
+		}
+		catch (ConfigLoadException exception) {
+			Airicraft.LOGGER.warn("Failed to load Airicraft mod config; using defaults", exception);
+			return AiricraftConfig.defaults();
+		}
+	}
+
+	public static AiricraftConfig loadStrict() throws ConfigLoadException {
+		return loadInternal(true);
+	}
+
+	private static AiricraftConfig loadInternal(boolean strict) throws ConfigLoadException {
 		AiricraftConfig defaults = AiricraftConfig.defaults();
 		Path configDir = FabricLoader.getInstance().getConfigDir().resolve("airicraft");
 		Path templatePath = configDir.resolve(TEMPLATE_FILENAME);
@@ -38,20 +52,31 @@ public final class AiricraftConfigLoader {
 			}
 
 			try (Reader fileReader = Files.newBufferedReader(configPath, StandardCharsets.UTF_8)) {
-				return fromMap(parseYaml(fileReader), defaults);
+				return strict ? fromMapStrict(parseYaml(fileReader), defaults) : fromMap(parseYaml(fileReader), defaults);
 			}
 		}
-		catch (IOException exception) {
-			Airicraft.LOGGER.warn("Failed to load Airicraft mod config; using defaults", exception);
-			return defaults;
+		catch (IOException | RuntimeException exception) {
+			throw new ConfigLoadException(
+				configPath,
+				"Failed to load %s: %s".formatted(configPath.getFileName(), nonEmpty(exception.getMessage(), exception.getClass().getSimpleName())),
+				exception
+			);
 		}
 	}
 
 	static AiricraftConfig fromMap(Map<String, Object> root, AiricraftConfig defaults) {
+		return fromMap(root, defaults, false);
+	}
+
+	static AiricraftConfig fromMapStrict(Map<String, Object> root, AiricraftConfig defaults) {
+		return fromMap(root, defaults, true);
+	}
+
+	private static AiricraftConfig fromMap(Map<String, Object> root, AiricraftConfig defaults, boolean strict) {
 		return new AiricraftConfig(
 			readInt(root, "socialChatMaxDistanceBlocks", defaults.socialChatMaxDistanceBlocks()),
-			readBoolean(root, "readSystemChatMessages", defaults.readSystemChatMessages()),
-			readBoolean(root, "enableProactiveSocialMode", defaults.enableProactiveSocialMode())
+			readBoolean(root, "readSystemChatMessages", defaults.readSystemChatMessages(), strict),
+			readBoolean(root, "enableProactiveSocialMode", defaults.enableProactiveSocialMode(), strict)
 		);
 	}
 
@@ -70,7 +95,7 @@ public final class AiricraftConfigLoader {
 				migratedData.put("readSystemChatMessages", defaults.readSystemChatMessages());
 				migratedData.put(
 					"enableProactiveSocialMode",
-					readBoolean(agentRoot, "enableProactiveSocialMode", defaults.enableProactiveSocialMode())
+					readBoolean(agentRoot, "enableProactiveSocialMode", defaults.enableProactiveSocialMode(), false)
 				);
 			}
 			Files.writeString(configPath, dumpYaml(migratedData), StandardCharsets.UTF_8);
@@ -117,7 +142,7 @@ public final class AiricraftConfigLoader {
 		return Integer.parseInt(String.valueOf(value));
 	}
 
-	private static boolean readBoolean(Map<String, Object> root, String fieldName, boolean fallback) {
+	private static boolean readBoolean(Map<String, Object> root, String fieldName, boolean fallback, boolean strict) {
 		if (root == null || !root.containsKey(fieldName) || root.get(fieldName) == null) {
 			return fallback;
 		}
@@ -125,7 +150,14 @@ public final class AiricraftConfigLoader {
 		if (value instanceof Boolean booleanValue) {
 			return booleanValue;
 		}
-		return Boolean.parseBoolean(String.valueOf(value));
+		String text = String.valueOf(value);
+		if ("true".equalsIgnoreCase(text) || "false".equalsIgnoreCase(text)) {
+			return Boolean.parseBoolean(text);
+		}
+		if (strict) {
+			throw new IllegalArgumentException(fieldName + " must be true or false");
+		}
+		return Boolean.parseBoolean(text);
 	}
 
 	private static Yaml createYaml() {
@@ -138,5 +170,9 @@ public final class AiricraftConfigLoader {
 
 	private static String dumpYaml(Map<String, Object> yamlData) {
 		return YAML.dump(yamlData);
+	}
+
+	private static String nonEmpty(String value, String fallback) {
+		return value == null || value.isBlank() ? fallback : value;
 	}
 }

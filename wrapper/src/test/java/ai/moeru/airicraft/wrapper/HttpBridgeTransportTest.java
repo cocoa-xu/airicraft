@@ -45,6 +45,24 @@ class HttpBridgeTransportTest {
 	}
 
 	@Test
+	void reloadPostsPayload(@TempDir Path tempDir) throws Exception {
+		try (TestBridgeServer server = TestBridgeServer.start()) {
+			server.respondJson("/v1/reload", 0, 200, """
+				{"available":true,"reloaded":true,"agentStateReset":true,"sessionMode":"SINGLEPLAYER_LOCAL","worldLoaded":true}
+				""");
+			writeBridgeState(tempDir, server.port());
+			System.setProperty("user.home", tempDir.toString());
+
+			HttpBridgeTransport transport = new HttpBridgeTransport();
+			Map<String, Object> payload = transport.reload();
+
+			assertEquals(true, payload.get("reloaded"));
+			assertEquals(1, server.requestCount("/v1/reload"));
+			assertEquals("POST", server.lastMethod("/v1/reload"));
+		}
+	}
+
+	@Test
 	void staleBridgeStateIsDeletedOnConnectFailure(@TempDir Path tempDir) throws Exception {
 		writeBridgeState(tempDir);
 		System.setProperty("user.home", tempDir.toString());

@@ -5,6 +5,8 @@ import java.util.Map;
 interface MinecraftTransport {
 	Map<String, Object> getStatus();
 
+	Map<String, Object> reload();
+
 	Map<String, Object> getFocus();
 
 	Map<String, Object> getWorldSnapshot(Integer x, Integer y, Integer z, int radius);

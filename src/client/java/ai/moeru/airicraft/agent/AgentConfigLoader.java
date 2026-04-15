@@ -1,8 +1,8 @@
 package ai.moeru.airicraft.agent;
 
 import ai.moeru.airicraft.Airicraft;
+import ai.moeru.airicraft.ConfigLoadException;
 import com.google.gson.Gson;
-import com.google.gson.JsonParseException;
 import net.fabricmc.loader.api.FabricLoader;
 import org.yaml.snakeyaml.DumperOptions;
 import org.yaml.snakeyaml.Yaml;
@@ -28,6 +28,20 @@ public final class AgentConfigLoader {
 	}
 
 	public static AgentConfig load() {
+		try {
+			return loadInternal(false);
+		}
+		catch (ConfigLoadException exception) {
+			Airicraft.LOGGER.warn("Failed to load Airicraft agent config; using defaults", exception);
+			return AgentConfig.defaults();
+		}
+	}
+
+	public static AgentConfig loadStrict() throws ConfigLoadException {
+		return loadInternal(true);
+	}
+
+	private static AgentConfig loadInternal(boolean strict) throws ConfigLoadException {
 		AgentConfig defaults = AgentConfig.defaults();
 		Path configDir = FabricLoader.getInstance().getConfigDir().resolve("airicraft");
 		Path templatePath = configDir.resolve(TEMPLATE_FILENAME);
@@ -47,23 +61,34 @@ public final class AgentConfigLoader {
 			}
 
 			try (Reader fileReader = Files.newBufferedReader(configPath, StandardCharsets.UTF_8)) {
-				return fromMap(parseYaml(fileReader), defaults);
+				return strict ? fromMapStrict(parseYaml(fileReader), defaults) : fromMap(parseYaml(fileReader), defaults);
 			}
 		}
-		catch (IOException | JsonParseException exception) {
-			Airicraft.LOGGER.warn("Failed to load Airicraft agent config; using defaults", exception);
-			return defaults;
+		catch (IOException | RuntimeException exception) {
+			throw new ConfigLoadException(
+				configPath,
+				"Failed to load %s: %s".formatted(configPath.getFileName(), nonEmpty(exception.getMessage(), exception.getClass().getSimpleName())),
+				exception
+			);
 		}
 	}
 
 	static AgentConfig fromMap(Map<String, Object> root, AgentConfig defaults) {
+		return fromMap(root, defaults, false);
+	}
+
+	static AgentConfig fromMapStrict(Map<String, Object> root, AgentConfig defaults) {
+		return fromMap(root, defaults, true);
+	}
+
+	private static AgentConfig fromMap(Map<String, Object> root, AgentConfig defaults, boolean strict) {
 		AgentConfig.LlmConfig llm = new AgentConfig.LlmConfig(
-			readString(root, "providerBaseUrl", defaults.llm().providerBaseUrl()),
-			readString(root, "apiKey", defaults.llm().apiKey()),
-			readString(root, "model", defaults.llm().model()),
-			readString(root, "visionProviderBaseUrl", defaults.llm().visionProviderBaseUrl()),
-			readString(root, "visionApiKey", defaults.llm().visionApiKey()),
-			readString(root, "visionModel", defaults.llm().visionModel()),
+			readString(root, "providerBaseUrl", defaults.llm().providerBaseUrl(), strict),
+			readString(root, "apiKey", defaults.llm().apiKey(), strict),
+			readString(root, "model", defaults.llm().model(), strict),
+			readString(root, "visionProviderBaseUrl", defaults.llm().visionProviderBaseUrl(), strict),
+			readString(root, "visionApiKey", defaults.llm().visionApiKey(), strict),
+			readString(root, "visionModel", defaults.llm().visionModel(), strict),
 			readInt(root, "requestTimeoutMillis", defaults.llm().requestTimeoutMillis()),
 			readInt(root, "visionRequestTimeoutMillis", defaults.llm().visionRequestTimeoutMillis()),
 			readInt(root, "maxRecentConversationTurns", defaults.llm().maxRecentConversationTurns()),
@@ -73,23 +98,23 @@ public final class AgentConfigLoader {
 			readInt(root, "plannerSessionCoalesceStepMillis", defaults.llm().plannerSessionCoalesceStepMillis()),
 			readInt(root, "plannerSessionCoalesceMinMillis", defaults.llm().plannerSessionCoalesceMinMillis()),
 			readInt(root, "plannerSessionCoalesceMaxMillis", defaults.llm().plannerSessionCoalesceMaxMillis()),
-			readString(root, "visionImageDetail", defaults.llm().visionImageDetail()),
-			readBoolean(root, "plannerNativeVisionEnabled", defaults.llm().plannerNativeVisionEnabled()),
-			readBoolean(root, "plannerUseJsonObjectResponseFormat", defaults.llm().plannerUseJsonObjectResponseFormat())
+			readString(root, "visionImageDetail", defaults.llm().visionImageDetail(), strict),
+			readBoolean(root, "plannerNativeVisionEnabled", defaults.llm().plannerNativeVisionEnabled(), strict),
+			readBoolean(root, "plannerUseJsonObjectResponseFormat", defaults.llm().plannerUseJsonObjectResponseFormat(), strict)
 		);
-		warnIfMalformedObject(root, "observability");
-		Map<String, Object> observabilityRoot = readObjectMap(root, "observability");
+		warnIfMalformedObject(root, "observability", strict);
+		Map<String, Object> observabilityRoot = readObjectMap(root, "observability", strict);
 		AgentConfig.ObservabilityConfig observability = new AgentConfig.ObservabilityConfig(
-			readBoolean(observabilityRoot, "enabled", defaults.observability().enabled()),
-			readString(observabilityRoot, "exporter", defaults.observability().exporter()),
-			readString(observabilityRoot, "otlpEndpoint", defaults.observability().otlpEndpoint()),
-			readStringMap(observabilityRoot, "otlpHeaders", defaults.observability().otlpHeaders()),
-			readStringMap(observabilityRoot, "resourceAttributes", defaults.observability().resourceAttributes()),
-			readString(observabilityRoot, "vendorProfile", defaults.observability().vendorProfile()),
-			readBoolean(observabilityRoot, "debugLogExports", defaults.observability().debugLogExports()),
-			readBoolean(observabilityRoot, "captureInputs", defaults.observability().captureInputs()),
-			readBoolean(observabilityRoot, "captureOutputs", defaults.observability().captureOutputs()),
-			readBoolean(observabilityRoot, "captureImages", defaults.observability().captureImages())
+			readBoolean(observabilityRoot, "enabled", defaults.observability().enabled(), strict),
+			readString(observabilityRoot, "exporter", defaults.observability().exporter(), strict),
+			readString(observabilityRoot, "otlpEndpoint", defaults.observability().otlpEndpoint(), strict),
+			readStringMap(observabilityRoot, "otlpHeaders", defaults.observability().otlpHeaders(), strict),
+			readStringMap(observabilityRoot, "resourceAttributes", defaults.observability().resourceAttributes(), strict),
+			readString(observabilityRoot, "vendorProfile", defaults.observability().vendorProfile(), strict),
+			readBoolean(observabilityRoot, "debugLogExports", defaults.observability().debugLogExports(), strict),
+			readBoolean(observabilityRoot, "captureInputs", defaults.observability().captureInputs(), strict),
+			readBoolean(observabilityRoot, "captureOutputs", defaults.observability().captureOutputs(), strict),
+			readBoolean(observabilityRoot, "captureImages", defaults.observability().captureImages(), strict)
 		);
 		return new AgentConfig(defaults.verificationEnabled(), defaults.verificationAutoRunAll(), llm, observability);
 	}
@@ -130,12 +155,12 @@ public final class AgentConfigLoader {
 		}
 
 		Map<String, Object> yamlData = new LinkedHashMap<>();
-		yamlData.put("providerBaseUrl", readString(root, "providerBaseUrl", defaults.llm().providerBaseUrl()));
-		yamlData.put("apiKey", readString(root, "apiKey", defaults.llm().apiKey()));
-		yamlData.put("model", readString(root, "model", defaults.llm().model()));
-		yamlData.put("visionProviderBaseUrl", readString(root, "visionProviderBaseUrl", defaults.llm().visionProviderBaseUrl()));
-		yamlData.put("visionApiKey", readString(root, "visionApiKey", defaults.llm().visionApiKey()));
-		yamlData.put("visionModel", readString(root, "visionModel", defaults.llm().visionModel()));
+		yamlData.put("providerBaseUrl", readString(root, "providerBaseUrl", defaults.llm().providerBaseUrl(), false));
+		yamlData.put("apiKey", readString(root, "apiKey", defaults.llm().apiKey(), false));
+		yamlData.put("model", readString(root, "model", defaults.llm().model(), false));
+		yamlData.put("visionProviderBaseUrl", readString(root, "visionProviderBaseUrl", defaults.llm().visionProviderBaseUrl(), false));
+		yamlData.put("visionApiKey", readString(root, "visionApiKey", defaults.llm().visionApiKey(), false));
+		yamlData.put("visionModel", readString(root, "visionModel", defaults.llm().visionModel(), false));
 		yamlData.put("requestTimeoutMillis", readInt(root, "requestTimeoutMillis", defaults.llm().requestTimeoutMillis()));
 		yamlData.put("visionRequestTimeoutMillis", readInt(root, "visionRequestTimeoutMillis", defaults.llm().visionRequestTimeoutMillis()));
 		yamlData.put("maxRecentConversationTurns", readInt(root, "maxRecentConversationTurns", defaults.llm().maxRecentConversationTurns()));
@@ -145,11 +170,11 @@ public final class AgentConfigLoader {
 		yamlData.put("plannerSessionCoalesceStepMillis", readInt(root, "plannerSessionCoalesceStepMillis", defaults.llm().plannerSessionCoalesceStepMillis()));
 		yamlData.put("plannerSessionCoalesceMinMillis", readInt(root, "plannerSessionCoalesceMinMillis", defaults.llm().plannerSessionCoalesceMinMillis()));
 		yamlData.put("plannerSessionCoalesceMaxMillis", readInt(root, "plannerSessionCoalesceMaxMillis", defaults.llm().plannerSessionCoalesceMaxMillis()));
-		yamlData.put("visionImageDetail", readString(root, "visionImageDetail", defaults.llm().visionImageDetail()));
-		yamlData.put("plannerNativeVisionEnabled", readBoolean(root, "plannerNativeVisionEnabled", defaults.llm().plannerNativeVisionEnabled()));
+		yamlData.put("visionImageDetail", readString(root, "visionImageDetail", defaults.llm().visionImageDetail(), false));
+		yamlData.put("plannerNativeVisionEnabled", readBoolean(root, "plannerNativeVisionEnabled", defaults.llm().plannerNativeVisionEnabled(), false));
 		yamlData.put(
 			"plannerUseJsonObjectResponseFormat",
-			readBoolean(root, "plannerUseJsonObjectResponseFormat", defaults.llm().plannerUseJsonObjectResponseFormat())
+			readBoolean(root, "plannerUseJsonObjectResponseFormat", defaults.llm().plannerUseJsonObjectResponseFormat(), false)
 		);
 		yamlData.put("observability", Map.of(
 			"enabled", defaults.observability().enabled(),
@@ -166,7 +191,7 @@ public final class AgentConfigLoader {
 		Files.writeString(yamlConfigPath, dumpYaml(yamlData), StandardCharsets.UTF_8);
 	}
 
-	private static void warnIfMalformedObject(Map<String, Object> root, String fieldName) {
+	private static void warnIfMalformedObject(Map<String, Object> root, String fieldName, boolean strict) {
 		if (root == null || !root.containsKey(fieldName)) {
 			return;
 		}
@@ -174,16 +199,22 @@ public final class AgentConfigLoader {
 		if (value == null || value instanceof Map<?, ?>) {
 			return;
 		}
+		if (strict) {
+			throw new IllegalArgumentException(fieldName + " must be a YAML mapping");
+		}
 		Airicraft.LOGGER.warn("Expected {} to be a YAML mapping; ignoring malformed value and using defaults for nested fields", fieldName);
 	}
 
 	@SuppressWarnings("unchecked")
-	private static Map<String, Object> readObjectMap(Map<String, Object> root, String fieldName) {
+	private static Map<String, Object> readObjectMap(Map<String, Object> root, String fieldName, boolean strict) {
 		if (root == null || !root.containsKey(fieldName) || root.get(fieldName) == null) {
 			return Map.of();
 		}
 		Object value = root.get(fieldName);
 		if (!(value instanceof Map<?, ?> map)) {
+			if (strict) {
+				throw new IllegalArgumentException(fieldName + " must be a YAML mapping");
+			}
 			return Map.of();
 		}
 		Map<String, Object> typed = new LinkedHashMap<>();
@@ -193,23 +224,30 @@ public final class AgentConfigLoader {
 		return typed;
 	}
 
-	private static Map<String, String> readStringMap(Map<String, Object> root, String fieldName, Map<String, String> fallback) {
-		Map<String, Object> raw = readObjectMap(root, fieldName);
+	private static Map<String, String> readStringMap(Map<String, Object> root, String fieldName, Map<String, String> fallback, boolean strict) {
+		Map<String, Object> raw = readObjectMap(root, fieldName, strict);
 		if (raw.isEmpty()) {
 			return fallback;
 		}
 		Map<String, String> typed = new LinkedHashMap<>();
 		for (Map.Entry<String, Object> entry : raw.entrySet()) {
+			if (strict && (entry.getValue() instanceof Map<?, ?> || entry.getValue() instanceof java.util.List<?>)) {
+				throw new IllegalArgumentException(fieldName + "." + entry.getKey() + " must be a scalar value");
+			}
 			typed.put(entry.getKey(), entry.getValue() == null ? "" : String.valueOf(entry.getValue()));
 		}
 		return typed;
 	}
 
-	private static String readString(Map<String, Object> root, String fieldName, String fallback) {
+	private static String readString(Map<String, Object> root, String fieldName, String fallback, boolean strict) {
 		if (root == null || !root.containsKey(fieldName) || root.get(fieldName) == null) {
 			return fallback;
 		}
-		String value = String.valueOf(root.get(fieldName));
+		Object rawValue = root.get(fieldName);
+		if (strict && (rawValue instanceof Map<?, ?> || rawValue instanceof java.util.List<?>)) {
+			throw new IllegalArgumentException(fieldName + " must be a scalar value");
+		}
+		String value = String.valueOf(rawValue);
 		return value == null ? fallback : value;
 	}
 
@@ -224,7 +262,7 @@ public final class AgentConfigLoader {
 		return Integer.parseInt(String.valueOf(value));
 	}
 
-	private static boolean readBoolean(Map<String, Object> root, String fieldName, boolean fallback) {
+	private static boolean readBoolean(Map<String, Object> root, String fieldName, boolean fallback, boolean strict) {
 		if (root == null || !root.containsKey(fieldName) || root.get(fieldName) == null) {
 			return fallback;
 		}
@@ -232,7 +270,14 @@ public final class AgentConfigLoader {
 		if (value instanceof Boolean booleanValue) {
 			return booleanValue;
 		}
-		return Boolean.parseBoolean(String.valueOf(value));
+		String text = String.valueOf(value);
+		if ("true".equalsIgnoreCase(text) || "false".equalsIgnoreCase(text)) {
+			return Boolean.parseBoolean(text);
+		}
+		if (strict) {
+			throw new IllegalArgumentException(fieldName + " must be true or false");
+		}
+		return Boolean.parseBoolean(text);
 	}
 
 	private static Yaml createYaml() {
@@ -245,5 +290,9 @@ public final class AgentConfigLoader {
 
 	private static String dumpYaml(Map<String, Object> yamlData) {
 		return YAML.dump(yamlData);
+	}
+
+	private static String nonEmpty(String value, String fallback) {
+		return value == null || value.isBlank() ? fallback : value;
 	}
 }

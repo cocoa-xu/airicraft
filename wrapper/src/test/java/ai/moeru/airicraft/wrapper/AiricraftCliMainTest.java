@@ -43,6 +43,34 @@ class AiricraftCliMainTest {
 	}
 
 	@Test
+	void reloadRendersDeterministicText() {
+		TestTransport transport = new TestTransport();
+		transport.reloadPayload = linkedMap(
+			"available", true,
+			"reloaded", true,
+			"agentStateReset", true,
+			"sessionMode", "SINGLEPLAYER_LOCAL",
+			"worldLoaded", true,
+			"plannerVisionMode", "native_tool_image",
+			"llmConfigured", true,
+			"visionConfigured", true,
+			"observabilityEnabled", false
+		);
+
+		CliResult result = execute(transport, "reload");
+
+		assertEquals(0, result.exitCode());
+		assertTrue(result.output().startsWith(
+			"status: ok\n" +
+				"command: reload\n"
+		));
+		assertTrue(result.output().contains("reloaded: true\n"));
+		assertTrue(result.output().contains("agentStateReset: true\n"));
+		assertTrue(result.output().contains("plannerVisionMode: native_tool_image\n"));
+		assertTrue(transport.reloadCalled);
+	}
+
+	@Test
 	void agentContextRendersCompactionState() {
 		TestTransport transport = new TestTransport();
 		transport.agentContextPayload = linkedMap(
@@ -787,6 +815,7 @@ class AiricraftCliMainTest {
 
 	private static final class TestTransport implements MinecraftTransport {
 		private Map<String, Object> statusPayload = Map.of();
+		private Map<String, Object> reloadPayload = Map.of();
 		private Map<String, Object> worldsPayload = Map.of("worlds", List.of());
 		private Map<String, Object> serversPayload = Map.of("servers", List.of());
 		private Map<String, Object> focusPayload = Map.of();
@@ -839,6 +868,7 @@ class AiricraftCliMainTest {
 		private String lastVerificationCommand;
 		private boolean verificationRespawnCalled;
 		private boolean agentEventPolicyCleared;
+		private boolean reloadCalled;
 		private Map<String, Object> lastSubmittedTask;
 		private Map<String, Object> lastSubmittedMission;
 		private String lastDebugChatMessage;
@@ -851,6 +881,12 @@ class AiricraftCliMainTest {
 		@Override
 		public Map<String, Object> getStatus() {
 			return statusPayload;
+		}
+
+		@Override
+		public Map<String, Object> reload() {
+			reloadCalled = true;
+			return reloadPayload;
 		}
 
 		@Override

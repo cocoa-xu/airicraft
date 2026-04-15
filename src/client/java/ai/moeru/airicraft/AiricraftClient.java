@@ -33,6 +33,17 @@ public class AiricraftClient implements ClientModInitializer {
 	public void onInitializeClient() {
 		ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> dispatcher.register(
 			ClientCommandManager.literal("airicraft")
+				.then(ClientCommandManager.literal("reload")
+					.executes(context -> {
+						try {
+							context.getSource().sendFeedback(Text.literal(RUNTIME_CONTROLLER.reload().feedbackText()));
+							return 1;
+						}
+						catch (BridgeUnavailableException exception) {
+							context.getSource().sendError(Text.literal("Airicraft reload failed: " + exception.getMessage()));
+							return 0;
+						}
+					}))
 				.then(ClientCommandManager.literal("debug")
 					.then(ClientCommandManager.literal("states")
 						.executes(context -> {

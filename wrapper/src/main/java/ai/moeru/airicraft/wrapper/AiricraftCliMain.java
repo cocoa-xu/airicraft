@@ -51,6 +51,7 @@ public final class AiricraftCliMain {
 		root.setUsageHelpWidth(100);
 
 		root.addSubcommand(new StatusCommand(context));
+		root.addSubcommand(new ReloadCommand(context));
 
 		root.addSubcommand("agent", new UsageCommand(out, "airicraft agent", "Agent observability and debug commands"));
 		CommandLine agent = root.getSubcommands().get("agent");
@@ -226,6 +227,18 @@ public final class AiricraftCliMain {
 		@Override
 		Map<String, Object> runCommand() {
 			return PayloadViews.status(transport().getStatus(), verbose());
+		}
+	}
+
+	@Command(name = "reload", mixinStandardHelpOptions = true, description = "Reload runtime config without restarting Minecraft.")
+	private static final class ReloadCommand extends BaseCommand {
+		private ReloadCommand(CliContext context) {
+			super(context, "reload");
+		}
+
+		@Override
+		Map<String, Object> runCommand() {
+			return PayloadViews.reload(transport().reload(), verbose());
 		}
 	}
 
@@ -1192,6 +1205,16 @@ public final class AiricraftCliMain {
 			copy(view, payload, "available", "bridgeAvailable", "worldLoaded", "sessionState", "currentScreen", "canJoinWorldOrServer", "state", "message");
 			if (verbose) {
 				copy(view, payload, "dimension", "player", "focus");
+			}
+			return view;
+		}
+
+		private static Map<String, Object> reload(Map<String, Object> payload, boolean verbose) {
+			LinkedHashMap<String, Object> view = new LinkedHashMap<>();
+			copy(view, payload, "available", "reloaded", "agentStateReset", "sessionMode", "worldLoaded",
+				"plannerVisionMode", "llmConfigured", "visionConfigured", "observabilityEnabled");
+			if (verbose) {
+				copy(view, payload, "config", "llm", "observability");
 			}
 			return view;
 		}

@@ -6,6 +6,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class AgentConfigLoaderTest {
 	@Test
@@ -106,5 +107,16 @@ class AgentConfigLoaderTest {
 		assertEquals("weave", parsed.observability().vendorProfile());
 		assertEquals("shinohara-rin", parsed.observability().resourceAttributes().get("wandb.entity"));
 		assertEquals("airicraft", parsed.observability().resourceAttributes().get("wandb.project"));
+	}
+
+	@Test
+	void fromMapStrictRejectsMalformedObservability() {
+		IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, () ->
+			AgentConfigLoader.fromMapStrict(Map.of(
+				"observability", "enabled"
+			), AgentConfig.defaults())
+		);
+
+		assertEquals("observability must be a YAML mapping", exception.getMessage());
 	}
 }

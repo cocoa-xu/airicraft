@@ -47,6 +47,7 @@
 
 ## Current CLI Commands
 - `airicraft status`
+- `airicraft reload`
 - `airicraft worlds list`
 - `airicraft worlds join --world-id <id>`
 - `airicraft servers list`
@@ -81,6 +82,7 @@
 
 ## Current Bridge Endpoints
 - `GET /v1/status`
+- `POST /v1/reload`
 - `GET /v1/worlds`
 - `POST /v1/worlds/join`
 - `GET /v1/servers`
@@ -91,6 +93,8 @@
 
 ## Behavior Notes
 - The bridge is tied to the Minecraft client process, not world load state.
+- `airicraft reload` and `/airicraft reload` reload both config files live without restarting the client.
+- Reload preserves the bridge session, highlights, and current world connection, but resets active agent/planner/task state.
 - `airicraft status` is a probe command and still exits `0` when Minecraft is unavailable, reporting `available: false`.
 - World-bound read/action commands still return `world_not_loaded` when no world is active.
 - `airicraft worlds join` and `airicraft servers join` return `already_in_world` if a world is already loaded.

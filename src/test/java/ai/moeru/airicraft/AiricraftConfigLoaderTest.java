@@ -6,6 +6,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AiricraftConfigLoaderTest {
@@ -22,5 +23,16 @@ class AiricraftConfigLoaderTest {
 		assertEquals(96, parsed.socialChatMaxDistanceBlocks());
 		assertFalse(parsed.readSystemChatMessages());
 		assertTrue(parsed.enableProactiveSocialMode());
+	}
+
+	@Test
+	void fromMapStrictRejectsInvalidBoolean() {
+		IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, () ->
+			AiricraftConfigLoader.fromMapStrict(Map.of(
+				"readSystemChatMessages", "sometimes"
+			), AiricraftConfig.defaults())
+		);
+
+		assertEquals("readSystemChatMessages must be true or false", exception.getMessage());
 	}
 }
