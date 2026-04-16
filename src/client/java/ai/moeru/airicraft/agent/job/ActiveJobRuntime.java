@@ -26,7 +26,6 @@ import ai.moeru.airicraft.agent.tasks.TaskSnapshot;
 import ai.moeru.airicraft.agent.tasks.TaskSpec;
 import ai.moeru.airicraft.agent.tasks.TaskState;
 import ai.moeru.airicraft.agent.tasks.TaskStep;
-import ai.moeru.airicraft.agent.tasks.WaitStepArgs;
 import ai.moeru.airicraft.agent.tasks.WorldEvidence;
 
 import java.util.Map;
@@ -217,7 +216,6 @@ public final class ActiveJobRuntime {
 
 		activeJob = switch (activeJob.type()) {
 			case COLLECT_RESOURCE -> tickCollectResource(activeJob, lastPrimitiveExecution, lastEvidence, actuationAllowed, nearbyResourceTargetAvailable, tick);
-			case WAIT -> tickWait(activeJob, tick);
 			case ASK_USER -> tickAskUser(activeJob, tick);
 			case FOLLOW_PLAYER, NAVIGATE_TO, MINE_BLOCKS -> tickGoalJob(activeJob, lastPrimitiveExecution, actuationAllowed, tick);
 			case IDLE -> ActiveJob.idle();
@@ -364,13 +362,6 @@ public final class ActiveJobRuntime {
 		return running;
 	}
 
-	private static ActiveJob tickWait(ActiveJob job, long tick) {
-		if (job.waitUntilTick() >= 0L && tick >= job.waitUntilTick()) {
-			return updated(job, ActiveJobStatus.COMPLETED, null, null, job.collectedCount(), tick);
-		}
-		return updated(job, ActiveJobStatus.RUNNING, null, null, job.collectedCount(), tick);
-	}
-
 	private static ActiveJob tickAskUser(ActiveJob job, long tick) {
 		return updated(job, ActiveJobStatus.BLOCKED, "waiting_for_user", null, job.collectedCount(), tick);
 	}
@@ -420,16 +411,10 @@ public final class ActiveJobRuntime {
 				source,
 				tick
 			);
-			case WAIT -> fromWaitStep(ledger.missionId(), activeStep.args().waitStep(), source, tick);
 			case ASK_USER -> fromAskUserStep(ledger.missionId(), activeStep.args().askUser(), source, tick);
 			case FINISH -> new ActiveJob(ledger.missionId(), ActiveJobType.IDLE, ActiveJobStatus.COMPLETED, null, null, null, -1L, 0, 0, source, null, null, tick);
 			default -> new ActiveJob(ledger.missionId(), ActiveJobType.ASK_USER, ActiveJobStatus.BLOCKED, null, null, "Unsupported step: " + activeStep.kind().name(), -1L, 0, 0, source, "unsupported_step", null, tick);
 		};
-	}
-
-	private static ActiveJob fromWaitStep(String jobId, WaitStepArgs waitStep, String source, long tick) {
-		long untilTick = waitStep == null ? tick : tick + Math.max(0L, waitStep.ticks());
-		return new ActiveJob(jobId, ActiveJobType.WAIT, ActiveJobStatus.QUEUED, null, null, null, untilTick, 0, 0, source, null, null, tick);
 	}
 
 	private static ActiveJob fromAskUserStep(String jobId, AskUserStepArgs askUser, String source, long tick) {
@@ -512,7 +497,6 @@ public final class ActiveJobRuntime {
 				null,
 				tick
 			);
-			case WAIT -> fromWaitStep(newJobId(), new WaitStepArgs(proposal.waitTicks() == null ? 0L : proposal.waitTicks(), null), source, tick);
 			case ASK_USER -> fromAskUserStep(newJobId(), new AskUserStepArgs(proposal.askPrompt()), source, tick);
 			case IDLE -> ActiveJob.idle();
 		};
@@ -573,7 +557,6 @@ public final class ActiveJobRuntime {
 			case NAVIGATE_TO -> "Navigate to target";
 			case MINE_BLOCKS -> "Mine blocks";
 			case COLLECT_RESOURCE -> activeJob.taskSpec() == null ? "Collect resource" : "Collect " + activeJob.taskSpec().quantity() + " " + activeJob.taskSpec().resourceKind().name().toLowerCase();
-			case WAIT -> "Wait";
 			case ASK_USER -> "Ask user";
 			case IDLE -> "";
 		};
@@ -584,7 +567,6 @@ public final class ActiveJobRuntime {
 			case FOLLOW_PLAYER, NAVIGATE_TO -> ai.moeru.airicraft.agent.tasks.LedgerStepKind.NAVIGATE_TO_POSITION;
 			case MINE_BLOCKS -> ai.moeru.airicraft.agent.tasks.LedgerStepKind.MINE_BLOCKS;
 			case COLLECT_RESOURCE -> ai.moeru.airicraft.agent.tasks.LedgerStepKind.COLLECT_RESOURCE;
-			case WAIT -> ai.moeru.airicraft.agent.tasks.LedgerStepKind.WAIT;
 			case ASK_USER -> ai.moeru.airicraft.agent.tasks.LedgerStepKind.ASK_USER;
 			case IDLE -> null;
 		};

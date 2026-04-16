@@ -372,7 +372,6 @@ class OpenAiCompatibleLlmBackendTest {
 							null,
 							null,
 							null,
-							null,
 							null
 						),
 						List.of(),
@@ -385,7 +384,6 @@ class OpenAiCompatibleLlmBackendTest {
 						"finish",
 						LedgerStepKind.FINISH,
 						new LedgerStepPayload(
-							null,
 							null,
 							null,
 							null,
@@ -469,7 +467,6 @@ class OpenAiCompatibleLlmBackendTest {
 							null,
 							null,
 							new CraftRecipeStepArgs("minecraft:stick", 4),
-							null,
 							null,
 							null,
 							null,

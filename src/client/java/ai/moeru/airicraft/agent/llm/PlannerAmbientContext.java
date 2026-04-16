@@ -150,7 +150,6 @@ public record PlannerAmbientContext(
 		return switch (step.kind()) {
 			case COLLECT_RESOURCE -> String.valueOf(step.args().collectResource());
 			case CRAFT_RECIPE -> String.valueOf(step.args().craftRecipe());
-			case WAIT -> String.valueOf(step.args().waitStep());
 			case ASK_USER -> String.valueOf(step.args().askUser());
 			case FINISH -> String.valueOf(step.args().finish());
 			case NAVIGATE_TO_POSITION -> String.valueOf(step.args().navigateToPosition());

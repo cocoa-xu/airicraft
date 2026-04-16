@@ -32,7 +32,6 @@ import ai.moeru.airicraft.agent.tasks.TaskResourceKind;
 import ai.moeru.airicraft.agent.tasks.TaskSpec;
 import ai.moeru.airicraft.agent.tasks.TaskType;
 import ai.moeru.airicraft.agent.tasks.TransferItemsStepArgs;
-import ai.moeru.airicraft.agent.tasks.WaitStepArgs;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -303,10 +302,6 @@ public final class OpenAiCompatibleLlmBackend implements LlmBackend {
 				.map(ActiveJobProposal::mineBlocks)
 				.orElse(null);
 			case COLLECT_RESOURCE -> parseActiveCollectResourceProposal(jobObject);
-			case WAIT -> {
-				Long waitTicks = getLong(jobObject, "waitTicks").orElseGet(() -> getLong(jobObject, "ticks").orElse(0L));
-				yield ActiveJobProposal.waitFor(waitTicks);
-			}
 			case ASK_USER -> {
 				String prompt = getString(jobObject, "askPrompt").orElseGet(() -> getString(jobObject, "prompt").orElse(null));
 				yield prompt == null ? null : ActiveJobProposal.askUser(prompt);
@@ -410,7 +405,6 @@ public final class OpenAiCompatibleLlmBackend implements LlmBackend {
 			parseTransferItemsStepArgs(argsObject, "transferItems"),
 			parsePlaceBlockStepArgs(argsObject, "placeBlock"),
 			parseDropItemsStepArgs(argsObject, "dropItems"),
-			parseWaitStepArgs(argsObject, "waitStep"),
 			parseAskUserStepArgs(argsObject, "askUser"),
 			parseFinishStepArgs(argsObject, "finish")
 		);
@@ -483,15 +477,6 @@ public final class OpenAiCompatibleLlmBackend implements LlmBackend {
 		JsonObject argsObject = object.getAsJsonObject(fieldName);
 		Optional<Integer> quantity = getInt(argsObject, "quantity");
 		return quantity.map(value -> new DropItemsStepArgs(getStringArray(argsObject, "itemFilters").orElse(List.of()), value)).orElse(null);
-	}
-
-	private static WaitStepArgs parseWaitStepArgs(JsonObject object, String fieldName) {
-		if (object == null || !object.has(fieldName) || !object.get(fieldName).isJsonObject()) {
-			return null;
-		}
-		JsonObject argsObject = object.getAsJsonObject(fieldName);
-		Optional<Integer> ticks = getInt(argsObject, "ticks");
-		return ticks.map(value -> new WaitStepArgs(value.longValue(), getString(argsObject, "reason").orElse(null))).orElse(null);
 	}
 
 	private static AskUserStepArgs parseAskUserStepArgs(JsonObject object, String fieldName) {

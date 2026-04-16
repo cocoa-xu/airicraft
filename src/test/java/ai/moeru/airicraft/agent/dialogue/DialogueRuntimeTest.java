@@ -188,7 +188,6 @@ class DialogueRuntimeTest {
 						null,
 						null,
 						null,
-						null,
 						null
 					),
 					List.of(),
@@ -201,7 +200,6 @@ class DialogueRuntimeTest {
 					"finish",
 					LedgerStepKind.FINISH,
 					new LedgerStepPayload(
-						null,
 						null,
 						null,
 						null,

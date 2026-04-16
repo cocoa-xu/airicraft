@@ -13,7 +13,6 @@ public record LedgerStepPayload(
 	TransferItemsStepArgs transferItems,
 	PlaceBlockStepArgs placeBlock,
 	DropItemsStepArgs dropItems,
-	WaitStepArgs waitStep,
 	AskUserStepArgs askUser,
 	FinishStepArgs finish
 ) {

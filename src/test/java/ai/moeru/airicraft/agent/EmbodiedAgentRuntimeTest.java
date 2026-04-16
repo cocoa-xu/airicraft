@@ -245,7 +245,6 @@ class EmbodiedAgentRuntimeTest {
 						null,
 						null,
 						null,
-						null,
 						null
 					),
 					List.of(),
@@ -258,7 +257,6 @@ class EmbodiedAgentRuntimeTest {
 					"finish",
 					LedgerStepKind.FINISH,
 					new LedgerStepPayload(
-						null,
 						null,
 						null,
 						null,

@@ -1588,7 +1588,7 @@ public final class EmbodiedAgentRuntime {
 		}
 		return switch (intent.activeJob().type()) {
 			case FOLLOW_PLAYER, NAVIGATE_TO, MINE_BLOCKS -> true;
-			case IDLE, COLLECT_RESOURCE, WAIT, ASK_USER -> false;
+			case IDLE, COLLECT_RESOURCE, ASK_USER -> false;
 		};
 	}
 
@@ -1600,7 +1600,6 @@ public final class EmbodiedAgentRuntime {
 			return true;
 		}
 		return snapshot.activeStepKind() == ai.moeru.airicraft.agent.tasks.LedgerStepKind.COLLECT_RESOURCE
-			|| snapshot.activeStepKind() == ai.moeru.airicraft.agent.tasks.LedgerStepKind.WAIT
 			|| snapshot.activeStepKind() == ai.moeru.airicraft.agent.tasks.LedgerStepKind.ASK_USER;
 	}
 

@@ -199,7 +199,7 @@ class PlannerContextAggregatorTest {
 				LedgerStepKind.COLLECT_RESOURCE,
 				new LedgerStepPayload(
 					new CollectResourceStepArgs(TaskResourceKind.WOOD_LOGS, 4, "KEEP"),
-					null, null, null, null, null, null, null, null, null, null, null
+					null, null, null, null, null, null, null, null, null, null
 				),
 				List.of(),
 				LedgerStepStatus.ACTIVE,

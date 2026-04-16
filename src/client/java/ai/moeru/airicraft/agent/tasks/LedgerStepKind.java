@@ -10,7 +10,6 @@ public enum LedgerStepKind {
 	TRANSFER_ITEMS,
 	PLACE_BLOCK,
 	DROP_ITEMS,
-	WAIT,
 	ASK_USER,
 	FINISH
 }

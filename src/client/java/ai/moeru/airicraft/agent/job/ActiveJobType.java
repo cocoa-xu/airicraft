@@ -6,6 +6,5 @@ public enum ActiveJobType {
 	NAVIGATE_TO,
 	MINE_BLOCKS,
 	COLLECT_RESOURCE,
-	WAIT,
 	ASK_USER
 }
