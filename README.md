@@ -133,6 +133,43 @@ For Minecraft dev client:
 ./gradlew runClient
 ```
 
+### Live JVM debugging with Arthas
+
+Airicraft includes dev-only Gradle helpers for attaching the Arthas CLI to the running Minecraft dev client. Arthas is external tooling: it does not add a mod dependency and does not replace the Airicraft bridge or JDWP.
+
+Start the client:
+
+```shell
+source .envrc && ./gradlew runClient
+```
+
+Open an interactive Arthas shell:
+
+```shell
+source .envrc && ./gradlew arthasShell
+```
+
+Run a one-shot Arthas command:
+
+```shell
+source .envrc && ./gradlew arthasExec -Pairicraft.arthas.command='sc ai.moeru.airicraft.*'
+```
+
+If process-name selection misses the dev client, find the JVM and attach by PID:
+
+```shell
+jps -lv
+source .envrc && ./gradlew arthasShell -Pairicraft.arthas.pid=<pid>
+```
+
+Useful Airicraft inspection commands include `sc`, `sm`, `jad`, `watch`, `trace`, `stack`, `tt`, `thread`, `dashboard`, and `ognl`.
+
+Arthas starts with full command power by default. Mutation commands such as `ognl`, `vmtool`, `sysprop`, `vmoption`, `redefine`, `retransform`, and `mc` can alter the live JVM; use them deliberately. To restrict commands for a session, pass a comma-separated list:
+
+```shell
+source .envrc && ./gradlew arthasShell -Pairicraft.arthas.disabledCommands=stop,dump,heapdump,redefine,retransform,mc
+```
+
 ```text
 > ./gradlew runClient
 The operation couldn't be completed. Unable to locate a Java Runtime.

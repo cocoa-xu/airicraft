@@ -8,6 +8,17 @@ group = project.maven_group
 
 def runClientJdwpPort = providers.gradleProperty("airicraft.jdwp.port").orElse("5005")
 def runClientJdwpSuspend = providers.gradleProperty("airicraft.jdwp.suspend").orElse("n")
+def arthasVersion = providers.gradleProperty("airicraft.arthas.version").orElse("4.1.8")
+def arthasBootUrl = providers.gradleProperty("airicraft.arthas.bootUrl").orElse("https://arthas.aliyun.com/arthas-boot.jar")
+def arthasSelect = providers.gradleProperty("airicraft.arthas.select").orElse("net.fabricmc.devlaunchinjector.Main")
+def arthasPid = providers.gradleProperty("airicraft.arthas.pid").orElse("")
+def arthasHttpPort = providers.gradleProperty("airicraft.arthas.httpPort").orElse("8563")
+def arthasTelnetPort = providers.gradleProperty("airicraft.arthas.telnetPort").orElse("3658")
+def arthasTargetIp = providers.gradleProperty("airicraft.arthas.targetIp").orElse("127.0.0.1")
+def arthasDisabledCommands = providers.gradleProperty("airicraft.arthas.disabledCommands").orElse("")
+def arthasExtraArgs = providers.gradleProperty("airicraft.arthas.args").orElse("")
+def arthasCommand = providers.gradleProperty("airicraft.arthas.command").orElse("")
+def arthasBootJar = layout.buildDirectory.file("arthas/arthas-boot-${arthasVersion.get()}.jar")
 
 base {
 	archivesName = project.archives_base_name
@@ -33,6 +44,109 @@ tasks.named("runClient").configure {
 	jvmArgs(
 		"-agentlib:jdwp=transport=dt_socket,server=y,suspend=${runClientJdwpSuspend.get()},address=127.0.0.1:${runClientJdwpPort.get()}"
 	)
+}
+
+def arthasJavaExecutable = {
+	new File(System.getProperty("java.home"), "bin/java").absolutePath
+}
+
+def arthasProcessSelectorArgs = {
+	def pid = arthasPid.get().trim()
+	if (!pid.isEmpty()) {
+		return [pid]
+	}
+	return ["--select", arthasSelect.get()]
+}
+
+def arthasExtraArgList = {
+	def extraArgs = arthasExtraArgs.get().trim()
+	if (extraArgs.isEmpty()) {
+		return []
+	}
+	return extraArgs.split(/\s+/).findAll { !it.isEmpty() }
+}
+
+def arthasBootArgs = { boolean attachOnly, String commandValue ->
+	def args = [
+		"-jar", arthasBootJar.get().asFile.absolutePath,
+		"--target-ip", arthasTargetIp.get(),
+		"--http-port", arthasHttpPort.get(),
+		"--telnet-port", arthasTelnetPort.get()
+	]
+
+	if (attachOnly) {
+		args.add("--attach-only")
+	}
+
+	if (commandValue != null && !commandValue.trim().isEmpty()) {
+		args.add("-c")
+		args.add(commandValue.trim())
+	}
+
+	def disabledCommands = arthasDisabledCommands.get().trim()
+	if (!disabledCommands.isEmpty()) {
+		args.add("--disabled-commands")
+		args.add(disabledCommands)
+	}
+
+	args.addAll(arthasExtraArgList())
+	args.addAll(arthasProcessSelectorArgs())
+	return args
+}
+
+tasks.register("downloadArthasBoot") {
+	group = "airicraft debug"
+	description = "Downloads the pinned Arthas boot jar for dev-client diagnostics."
+	outputs.file(arthasBootJar)
+
+	doLast {
+		def outputFile = arthasBootJar.get().asFile
+		if (outputFile.exists() && outputFile.length() > 0) {
+			logger.lifecycle("Arthas boot jar already exists: ${outputFile}")
+			return
+		}
+
+		outputFile.parentFile.mkdirs()
+		logger.lifecycle("Downloading Arthas boot jar from ${arthasBootUrl.get()} to ${outputFile}")
+		ant.get(src: arthasBootUrl.get(), dest: outputFile)
+	}
+}
+
+tasks.register("arthasAttach", Exec) {
+	group = "airicraft debug"
+	description = "Attaches Arthas to the running Minecraft dev client without opening a shell."
+	dependsOn tasks.named("downloadArthasBoot")
+	standardInput = System.in
+
+	doFirst {
+		commandLine([arthasJavaExecutable()] + arthasBootArgs(true, null))
+	}
+}
+
+tasks.register("arthasShell", Exec) {
+	group = "airicraft debug"
+	description = "Attaches Arthas to the running Minecraft dev client and opens the Arthas shell."
+	dependsOn tasks.named("downloadArthasBoot")
+	standardInput = System.in
+
+	doFirst {
+		commandLine([arthasJavaExecutable()] + arthasBootArgs(false, null))
+	}
+}
+
+tasks.register("arthasExec", Exec) {
+	group = "airicraft debug"
+	description = "Runs one Arthas command against the running Minecraft dev client."
+	dependsOn tasks.named("downloadArthasBoot")
+	standardInput = System.in
+
+	doFirst {
+		def commandValue = arthasCommand.get().trim()
+		if (commandValue.isEmpty()) {
+			throw new GradleException("arthasExec requires -Pairicraft.arthas.command=<arthas command>")
+		}
+		commandLine([arthasJavaExecutable()] + arthasBootArgs(false, commandValue))
+	}
 }
 
 dependencies {

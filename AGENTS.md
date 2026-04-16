@@ -17,6 +17,21 @@
 - Override JDWP settings with Gradle properties, for example:
   - `./gradlew runClient -Pairicraft.jdwp.port=5006`
   - `./gradlew runClient -Pairicraft.jdwp.suspend=y`
+- Arthas CLI live-debug:
+  - Start client first: `source .envrc && ./gradlew runClient`
+  - Attach shell: `source .envrc && ./gradlew arthasShell`
+  - One-shot: `source .envrc && ./gradlew arthasExec -Pairicraft.arthas.command='version'`
+  - If select fails: `jps -lv`, then `source .envrc && ./gradlew arthasShell -Pairicraft.arthas.pid=<pid>`
+  - Useful probes: `sc ai.moeru.airicraft.*`, `sm <class>`, `jad <class>`, `thread -n 5`, `dashboard`
+  - Useful live observe: `watch <class> <method> '{params, returnObj, throwExp}' -n 1 -m 1 --timeout 10`
+  - Useful path cost: `trace <class> <method> '#cost>10' -n 1 -m 1 --timeout 10`
+  - Useful call source: `stack <class> <method> -n 1 --timeout 10`
+  - Useful history: `tt -t <class> <method> -n 1 -m 1 --timeout 10`; cleanup with `tt --delete-all`
+  - Use full class/method patterns. Broad `watch`/`trace`/`tt` can slow or hang client.
+  - `ognl`, `vmtool`, `sysprop`, `vmoption`, `redefine`, `retransform`, `mc` mutate runtime. Ask before use.
+  - OGNL runs on Arthas thread, not Minecraft client thread. Do not mutate MC world/player state with OGNL.
+  - Airibridge = safe domain actions. Arthas = inspect/instrument. JDWP = pause/step.
+  - If behavior weird after rebuild, restart `runClient`; Arthas sees loaded old classes until client restart.
 - CLI entrypoint: `wrapper/src/main/java/ai/moeru/airicraft/wrapper/AiricraftCliMain.java`
 - CLI artifact is built by the `wrapper` subproject as a runnable jar and application distribution.
 
