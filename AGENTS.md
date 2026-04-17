@@ -1,7 +1,7 @@
 # Airicraft Agent Notes
 
 ## Current Project State
-- This repo is a Fabric mod for Minecraft `1.21.11`.
+- This repo is a Fabric mod for Minecraft `1.21.8`.
 - It currently uses Yarn mappings, not Mojang official mappings.
 - Java target is `21`.
 - The build is a multi-project Gradle build with:
