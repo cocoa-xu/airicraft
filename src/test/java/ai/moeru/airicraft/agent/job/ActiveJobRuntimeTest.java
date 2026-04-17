@@ -1,6 +1,11 @@
 package ai.moeru.airicraft.agent.job;
 
-import ai.moeru.airicraft.agent.tasks.BaritoneTaskRequest;
+import ai.moeru.airicraft.agent.dialogue.DialogueIntent;
+import ai.moeru.airicraft.agent.dialogue.DialogueIntentType;
+import ai.moeru.airicraft.agent.dialogue.DialogueResponse;
+import ai.moeru.airicraft.agent.tasks.CraftRecipeStepArgs;
+import ai.moeru.airicraft.agent.tasks.WorldTaskRequest;
+import ai.moeru.airicraft.agent.tasks.WorldTaskType;
 import ai.moeru.airicraft.agent.tasks.TaskExecutionSnapshot;
 import ai.moeru.airicraft.agent.tasks.TaskExecutionState;
 import ai.moeru.airicraft.agent.tasks.TaskResourceKind;
@@ -14,6 +19,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ActiveJobRuntimeTest {
@@ -23,7 +29,7 @@ class ActiveJobRuntimeTest {
 		runtime.submitTask(new TaskSpec(TaskType.COLLECT_RESOURCE, TaskResourceKind.WOOD_LOGS, 16), 4, "test", 1L);
 
 		runtime.tick(TaskExecutionSnapshot.idle(), evidence(4, 2L), true, true, 2L);
-		BaritoneTaskRequest firstAttempt = runtime.activeTaskRequest().orElseThrow();
+		WorldTaskRequest firstAttempt = runtime.activeTaskRequest().orElseThrow();
 		TaskExecutionSnapshot running = new TaskExecutionSnapshot(
 			TaskExecutionState.RUNNING,
 			firstAttempt.taskId(),
@@ -35,7 +41,7 @@ class ActiveJobRuntimeTest {
 		);
 
 		runtime.tick(running, evidence(5, 3L), true, true, 3L);
-		BaritoneTaskRequest afterPickup = runtime.activeTaskRequest().orElseThrow();
+		WorldTaskRequest afterPickup = runtime.activeTaskRequest().orElseThrow();
 
 		assertEquals(firstAttempt.taskId(), afterPickup.taskId());
 		assertEquals(20, afterPickup.goal().mineSpec().quantity());
@@ -50,7 +56,7 @@ class ActiveJobRuntimeTest {
 		runtime.submitTask(new TaskSpec(TaskType.COLLECT_RESOURCE, TaskResourceKind.WOOD_LOGS, 16), 4, "test", 1L);
 
 		runtime.tick(TaskExecutionSnapshot.idle(), evidence(4, 2L), true, true, 2L);
-		BaritoneTaskRequest firstAttempt = runtime.activeTaskRequest().orElseThrow();
+		WorldTaskRequest firstAttempt = runtime.activeTaskRequest().orElseThrow();
 		TaskExecutionSnapshot completed = new TaskExecutionSnapshot(
 			TaskExecutionState.COMPLETED,
 			firstAttempt.taskId(),
@@ -62,7 +68,7 @@ class ActiveJobRuntimeTest {
 		);
 
 		runtime.tick(completed, evidence(5, 3L), true, true, 3L);
-		BaritoneTaskRequest secondAttempt = runtime.activeTaskRequest().orElseThrow();
+		WorldTaskRequest secondAttempt = runtime.activeTaskRequest().orElseThrow();
 
 		assertNotEquals(firstAttempt.taskId(), secondAttempt.taskId());
 		assertTrue(secondAttempt.taskId().endsWith(":mine:2"));
@@ -75,9 +81,57 @@ class ActiveJobRuntimeTest {
 		runtime.submitTask(new TaskSpec(TaskType.COLLECT_RESOURCE, TaskResourceKind.WOOD_LOGS, 5), 5, "test", 1L);
 
 		runtime.tick(TaskExecutionSnapshot.idle(), evidence(5, 2L), true, true, 2L);
-		BaritoneTaskRequest attempt = runtime.activeTaskRequest().orElseThrow();
+		WorldTaskRequest attempt = runtime.activeTaskRequest().orElseThrow();
 
 		assertEquals(10, attempt.goal().mineSpec().quantity());
+	}
+
+	@Test
+	void clearGoalDoesNotCancelCompletedCollectJob() {
+		ActiveJobRuntime runtime = new ActiveJobRuntime();
+		runtime.submitTask(new TaskSpec(TaskType.COLLECT_RESOURCE, TaskResourceKind.WOOD_LOGS, 5), 3, "test", 1L);
+
+		runtime.tick(TaskExecutionSnapshot.idle(), evidence(8, 2L), true, true, 2L);
+		assertEquals(ActiveJobStatus.COMPLETED, runtime.current().status());
+
+		runtime.applyPlannerResponse(
+			new DialogueResponse(
+				"Done.",
+				new DialogueIntent(DialogueIntentType.CLEAR_GOAL, null, null),
+				3L
+			),
+			8,
+			"planner_response",
+			3L
+		);
+
+		assertEquals(ActiveJobStatus.COMPLETED, runtime.current().status());
+		assertNull(runtime.current().lastError());
+	}
+
+	@Test
+	void craftRecipeActiveJobProjectsWorldTaskRequest() {
+		ActiveJobRuntime runtime = new ActiveJobRuntime();
+		CraftRecipeStepArgs craftRecipe = new CraftRecipeStepArgs("oak_planks_x2_to_stick", 1);
+
+		runtime.applyPlannerResponse(
+			new DialogueResponse(
+				"Crafting sticks.",
+				new DialogueIntent(DialogueIntentType.JOB_UPDATE, ActiveJobProposal.craftRecipe(craftRecipe)),
+				1L
+			),
+			0,
+			"test",
+			1L
+		);
+
+		WorldTaskRequest request = runtime.activeTaskRequest().orElseThrow();
+
+		assertEquals(WorldTaskType.CRAFT_RECIPE, request.type());
+		assertEquals(craftRecipe, request.craftRecipe());
+		assertNull(request.goal());
+		assertEquals(ActiveJobType.CRAFT_RECIPE, runtime.current().type());
+		assertEquals(craftRecipe, runtime.current().craftRecipe());
 	}
 
 	private static WorldEvidence evidence(int woodLogs, long tick) {

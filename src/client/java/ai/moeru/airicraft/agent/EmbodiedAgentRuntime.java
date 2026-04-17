@@ -75,7 +75,7 @@ import ai.moeru.airicraft.agent.social.PrimaryInteractionPlayer;
 import ai.moeru.airicraft.agent.social.PrimaryInteractionResolver;
 import ai.moeru.airicraft.agent.tasks.TaskExecutionSnapshot;
 import ai.moeru.airicraft.agent.tasks.TaskExecutionState;
-import ai.moeru.airicraft.agent.tasks.BaritoneTaskRequest;
+import ai.moeru.airicraft.agent.tasks.WorldTaskRequest;
 import ai.moeru.airicraft.agent.tasks.CollectResourceTaskHandler;
 import ai.moeru.airicraft.agent.tasks.InventoryItemCounter;
 import ai.moeru.airicraft.agent.tasks.InventoryResourceCounter;
@@ -363,7 +363,7 @@ public final class EmbodiedAgentRuntime {
 		debugRecorder.recordCollectResourceProbe(activeJobRuntime.collectResourceDebugSnapshot());
 		recordSemanticTaskTransition(previousTaskSnapshot, taskSnapshot);
 		Optional<GoalSnapshot> activeGoal = activeGoal();
-		Optional<BaritoneTaskRequest> activeTaskRequest = activeJobRuntime.activeTaskRequest();
+		Optional<WorldTaskRequest> activeTaskRequest = activeJobRuntime.activeTaskRequest();
 
 		followState = followCapability.tick(
 			client,
@@ -988,9 +988,10 @@ public final class EmbodiedAgentRuntime {
 
 		String equippedItemId = Registries.ITEM.getId(client.player.getMainHandStack().getItem()).toString();
 		BlockPos origin = client.player.getBlockPos();
+		Map<String, Integer> itemCounts = inventoryItemCounter.count(client.player.getInventory());
 		return new WorldEvidence(
 			resourceCounts,
-			inventoryItemCounter.count(client.player.getInventory()),
+			itemCounts,
 			collectNearbyBlocks(client, origin),
 			client.world == null ? null : client.world.getRegistryKey().getValue().toString(),
 			origin.getX(),
@@ -1229,6 +1230,8 @@ public final class EmbodiedAgentRuntime {
 				sessionSnapshot,
 				primaryInteractionPlayer,
 				activeGoal,
+				taskSnapshot,
+				missionExecutionSnapshot,
 				plannerEventBuffer
 			);
 		}
@@ -1591,24 +1594,24 @@ public final class EmbodiedAgentRuntime {
 				|| current.state() == TaskState.FAILED
 				|| current.state() == TaskState.CANCELLED
 		) {
-				dialogueRuntime.onInternalTaskUpdate(
-					"TASK UPDATE: state=" + current.state().name()
-						+ " missionId=" + (current.mission() == null ? "" : current.mission().missionId())
-						+ " missionType=" + (current.mission() == null ? "" : current.mission().missionType().name())
-						+ " activeStepId=" + (current.activeStepId() == null ? "" : current.activeStepId())
-						+ " activeStepKind=" + (current.activeStepKind() == null ? "" : current.activeStepKind().name())
-						+ " taskType=" + (current.spec() == null ? "" : current.spec().type().name())
-						+ " resourceKind=" + (current.spec() == null ? "" : current.spec().resourceKind().name())
-						+ " collected=" + current.progress().collected()
+			dialogueRuntime.onInternalTaskUpdate(
+				"TASK UPDATE: state=" + current.state().name()
+					+ " missionId=" + (current.mission() == null ? "" : current.mission().missionId())
+					+ " missionType=" + (current.mission() == null ? "" : current.mission().missionType().name())
+					+ " activeStepId=" + (current.activeStepId() == null ? "" : current.activeStepId())
+					+ " activeStepKind=" + (current.activeStepKind() == null ? "" : current.activeStepKind().name())
+					+ " taskType=" + (current.spec() == null ? "" : current.spec().type().name())
+					+ " resourceKind=" + (current.spec() == null ? "" : current.spec().resourceKind().name())
+					+ " collected=" + current.progress().collected()
 					+ " remaining=" + current.progress().remaining()
 					+ " failure=" + (current.lastFailure() == null ? "" : current.lastFailure()),
-					tickCount,
-					sessionSnapshot,
-					activeGoal(),
-					current,
-					missionExecutionSnapshot,
-					eventBuffer
-				);
+				tickCount,
+				sessionSnapshot,
+				activeGoal(),
+				current,
+				missionExecutionSnapshot,
+				eventBuffer
+			);
 		}
 	}
 
@@ -1629,7 +1632,7 @@ public final class EmbodiedAgentRuntime {
 		}
 		return switch (intent.activeJob().type()) {
 			case FOLLOW_PLAYER, NAVIGATE_TO, MINE_BLOCKS -> true;
-			case IDLE, COLLECT_RESOURCE, ASK_USER -> false;
+			case IDLE, COLLECT_RESOURCE, CRAFT_RECIPE, ASK_USER -> false;
 		};
 	}
 
@@ -1641,6 +1644,7 @@ public final class EmbodiedAgentRuntime {
 			return true;
 		}
 		return snapshot.activeStepKind() == ai.moeru.airicraft.agent.tasks.LedgerStepKind.COLLECT_RESOURCE
+			|| snapshot.activeStepKind() == ai.moeru.airicraft.agent.tasks.LedgerStepKind.CRAFT_RECIPE
 			|| snapshot.activeStepKind() == ai.moeru.airicraft.agent.tasks.LedgerStepKind.ASK_USER;
 	}
 
@@ -1679,18 +1683,20 @@ public final class EmbodiedAgentRuntime {
 			eventBuffer.append(tickCount, eventType, payload);
 		}
 
-			dialogueRuntime.onInternalTaskUpdate(
-				"TASK UPDATE: state=" + event.terminalState().name()
-					+ " taskId=" + event.taskId()
-					+ " goalType=" + event.goal().type().name()
-					+ " message=" + (event.message() == null ? "" : event.message()),
-				tickCount,
-				sessionSnapshot,
-				activeGoal(),
-				taskSnapshot,
-				missionExecutionSnapshot,
-				eventBuffer
-			);
+		if (event.terminalState() != TaskExecutionState.FAILED) {
+				dialogueRuntime.onInternalTaskUpdate(
+					"TASK UPDATE: state=" + event.terminalState().name()
+						+ " taskId=" + event.taskId()
+						+ " goalType=" + event.goal().type().name()
+						+ " message=" + (event.message() == null ? "" : event.message()),
+					tickCount,
+					sessionSnapshot,
+					activeGoal(),
+					taskSnapshot,
+					missionExecutionSnapshot,
+					eventBuffer
+				);
+		}
 	}
 
 	private void registerDefaultScenarios() {
@@ -2294,7 +2300,7 @@ public final class EmbodiedAgentRuntime {
 		private static final NoopWorldTaskExecutor INSTANCE = new NoopWorldTaskExecutor();
 
 		@Override
-		public Optional<TaskTerminalEvent> tick(SessionSnapshot sessionSnapshot, Optional<BaritoneTaskRequest> activeTask) {
+		public Optional<TaskTerminalEvent> tick(SessionSnapshot sessionSnapshot, Optional<WorldTaskRequest> activeTask) {
 			return Optional.empty();
 		}
 

@@ -238,7 +238,18 @@ class PlannerContextAggregatorTest {
 				new MissionSpec("mission-wood-1", MissionType.COLLECT_RESOURCE, "Collect 4 wood logs"),
 				ledger,
 				null,
-				new WorldEvidence(Map.of(ai.moeru.airicraft.agent.tasks.TaskResourceKind.WOOD_LOGS, 2), Map.of("minecraft:oak_log", 3), "minecraft:overworld", 0, 64, 0, null, 200L),
+				new WorldEvidence(
+					Map.of(ai.moeru.airicraft.agent.tasks.TaskResourceKind.WOOD_LOGS, 2),
+					Map.of("minecraft:oak_log", 3),
+					Map.of(),
+					List.of(new ai.moeru.airicraft.agent.tasks.CraftingOpportunity("oak_log_to_oak_planks", "minecraft:oak_planks", 4, List.of("minecraft:oak_log"))),
+					"minecraft:overworld",
+					0,
+					64,
+					0,
+					null,
+					200L
+				),
 				new StepExecutionResult("collect_logs", StepExecutionStatus.RUNNING, null, Map.of(), Map.of(), 200L),
 				TaskExecutionSnapshot.idle()
 			),
@@ -253,6 +264,7 @@ class PlannerContextAggregatorTest {
 		assertTrue(conversation.messages().stream().anyMatch(message -> message.content().contains("Compatibility ledger snapshot:")));
 		assertTrue(conversation.messages().stream().anyMatch(message -> message.content().contains("Last step result:")));
 		assertTrue(conversation.messages().stream().anyMatch(message -> message.content().contains("Compatibility history summary:")));
+		assertTrue(conversation.messages().stream().anyMatch(message -> message.content().contains("[From {1*oak_log} to 4*oak_planks]: oak_log_to_oak_planks")));
 	}
 
 	@Test
@@ -338,6 +350,47 @@ class PlannerContextAggregatorTest {
 
 		assertEquals("On it.", assistantMessage.content());
 		assertTrue(assistantMessage.rawContentOverride().isJsonArray());
+	}
+
+	@Test
+	void acceptedToolExchangeRehydratesIntoLaterPlannerHistory() {
+		MutableClock clock = new MutableClock(Instant.ofEpochMilli(1_000L), ZoneId.of("Asia/Taipei"));
+		PlannerContextAggregator aggregator = new PlannerContextAggregator(clock, 65_536, PlannerVisionMode.EXTERNAL_SUMMARY);
+
+		PlannerContextSnapshot firstSnapshot = freezeSnapshot(aggregator, requestAt(1_000L, "Alice", "@agent craft 4 planks"));
+		aggregator.commitAcceptedTriggerBatch(firstSnapshot);
+		aggregator.recordAcceptedToolExchange(
+			JsonParser.parseString("""
+				[
+				  {
+				    "type": "text",
+				    "text": "{\\"replyText\\":\\"\\",\\"intent\\":{\\"type\\":\\"none\\"},\\"toolRequest\\":{\\"type\\":\\"inspect_recipes\\"}}"
+				  }
+				]
+				"""),
+			"Tool result for inspect_recipes: availableCrafts=Available 2x2 crafts: [From {1*birch_wood} to 4*birch_planks]: birch_wood_to_birch_planks",
+			20L,
+			1_000L
+		);
+		aggregator.recordAgentTurn(
+			new ai.moeru.airicraft.agent.dialogue.DialogueTurn("agent", "I can craft birch planks.", 21L, 1_500L),
+			null
+		);
+
+		LlmConversation laterConversation = freezeSnapshot(aggregator, requestAt(clock.millis() + 5_000L, "Alice", "@agent craft them"))
+			.plannerConversation();
+
+		LlmChatMessage toolRequest = laterConversation.messages().stream()
+			.filter(message -> "assistant".equals(message.role()) && message.rawContentOverride() != null)
+			.findFirst()
+			.orElseThrow();
+		assertTrue(toolRequest.rawContentOverride().toString().contains("inspect_recipes"));
+
+		LlmChatMessage toolResult = laterConversation.messages().stream()
+			.filter(message -> message.kind() == LlmMessageKind.TOOL_RESULT)
+			.findFirst()
+			.orElseThrow();
+		assertTrue(toolResult.content().contains("birch_wood_to_birch_planks"));
 	}
 
 	private static PlannerRequest requestAt(long timestampMs, String sender, String message) {

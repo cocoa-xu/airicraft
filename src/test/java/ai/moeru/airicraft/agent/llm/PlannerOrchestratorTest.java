@@ -3,6 +3,7 @@ package ai.moeru.airicraft.agent.llm;
 import ai.moeru.airicraft.BridgeUnavailableException;
 import ai.moeru.airicraft.FirstPersonScreenshotService;
 import ai.moeru.airicraft.agent.AgentConfig;
+import ai.moeru.airicraft.agent.debug.AgentDebugRecorder;
 import ai.moeru.airicraft.agent.dialogue.DialogueTurn;
 import ai.moeru.airicraft.agent.observability.NoopObservability;
 import ai.moeru.airicraft.agent.events.EventPolicyChanges;
@@ -88,6 +89,77 @@ class PlannerOrchestratorTest {
 		assertEquals("A birch forest hill under open sky.", result.request().toolResult());
 		assertEquals(1, visionTool.captureRequestCount());
 		assertEquals(1, visionTool.descriptionRequestCount());
+	}
+
+	@Test
+	void singleToolCallFeedsInventoryInspectionBackIntoPlanner() {
+		OpenAiCompatibleLlmBackend backend = new OpenAiCompatibleLlmBackend(AgentConfig.LlmConfig.defaults());
+		backend.injectMockResponse(new PlannerResponse(
+			"",
+			new PlannerIntent("none", null, null),
+			new PlannerToolRequest("inspect_inventory", null)
+		));
+		backend.injectMockResponse(new PlannerResponse(
+			"You have 5 jungle logs.",
+			new PlannerIntent("reply_only", null, null)
+		));
+		StubInventoryTool inventoryTool = new StubInventoryTool(
+			"Tool result for inspect_inventory: itemCounts={minecraft:jungle_log=5}",
+			"unused"
+		);
+		PlannerOrchestrator orchestrator = newOrchestrator(
+			backend,
+			CurrentViewVisionTool.disabled(),
+			inventoryTool,
+			PlannerVisionMode.EXTERNAL_SUMMARY
+		);
+
+		orchestrator.submit(baseRequest(null));
+		PlannerExecutionResult result = awaitResult(orchestrator);
+
+		assertNotNull(result);
+		assertTrue(result.succeeded());
+		assertEquals("You have 5 jungle logs.", result.response().replyText());
+		assertEquals("Tool result for inspect_inventory: itemCounts={minecraft:jungle_log=5}", result.request().toolResult());
+		assertEquals(1, inventoryTool.inventoryRequestCount());
+		assertEquals(0, inventoryTool.recipeRequestCount());
+	}
+
+	@Test
+	void singleToolCallFeedsRecipeInspectionBackIntoPlanner() {
+		OpenAiCompatibleLlmBackend backend = new OpenAiCompatibleLlmBackend(AgentConfig.LlmConfig.defaults());
+		backend.injectMockResponse(new PlannerResponse(
+			"",
+			new PlannerIntent("none", null, null),
+			new PlannerToolRequest("inspect_recipes", null)
+		));
+		backend.injectMockResponse(new PlannerResponse(
+			"You can craft jungle planks.",
+			new PlannerIntent("reply_only", null, null)
+		));
+		StubInventoryTool inventoryTool = new StubInventoryTool(
+			"unused",
+			"Tool result for inspect_recipes: availableCrafts=Available 2x2 crafts: [From {1*jungle_log} to 4*jungle_planks]: jungle_log_to_jungle_planks"
+		);
+		PlannerOrchestrator orchestrator = newOrchestrator(
+			backend,
+			CurrentViewVisionTool.disabled(),
+			inventoryTool,
+			PlannerVisionMode.EXTERNAL_SUMMARY
+		);
+
+		orchestrator.submit(baseRequest(null));
+		PlannerExecutionResult result = awaitResult(orchestrator);
+
+		assertNotNull(result);
+		assertTrue(result.succeeded());
+		assertEquals("You can craft jungle planks.", result.response().replyText());
+		assertEquals(
+			"Tool result for inspect_recipes: availableCrafts=Available 2x2 crafts: [From {1*jungle_log} to 4*jungle_planks]: jungle_log_to_jungle_planks",
+			result.request().toolResult()
+		);
+		assertEquals(0, inventoryTool.inventoryRequestCount());
+		assertEquals(1, inventoryTool.recipeRequestCount());
 	}
 
 	@Test
@@ -950,6 +1022,63 @@ class PlannerOrchestratorTest {
 	}
 
 	@Test
+	void acceptedToolExchangeRehydratesIntoNextPlannerPrompt() {
+		RecordingBackend backend = new RecordingBackend();
+		StubInventoryTool inventoryTool = new StubInventoryTool(
+			"unused",
+			"Tool result for inspect_recipes: availableCrafts=Available 2x2 crafts: [From {1*birch_wood} to 4*birch_planks]: birch_wood_to_birch_planks"
+		);
+		PlannerOrchestrator orchestrator = newOrchestrator(
+			backend,
+			CurrentViewVisionTool.disabled(),
+			inventoryTool,
+			PlannerVisionMode.EXTERNAL_SUMMARY
+		);
+
+		orchestrator.submit(requestAt(10L, 1_000L, "Alice", "@agent what can I craft?"));
+		backend.awaitCalls(1, Duration.ofSeconds(1));
+		backend.succeed(0, new PlannerResponse(
+			"",
+			new PlannerIntent("none", null, null),
+			new PlannerToolRequest("inspect_recipes", null),
+			null,
+			JsonParser.parseString("""
+				[
+				  {
+				    "type": "text",
+				    "text": "{\\"replyText\\":\\"\\",\\"intent\\":{\\"type\\":\\"none\\"},\\"toolRequest\\":{\\"type\\":\\"inspect_recipes\\",\\"prompt\\":null}}"
+				  }
+				]
+				""")
+		));
+
+		awaitBackendCallCount(orchestrator, backend, 2, Duration.ofSeconds(1));
+		backend.succeed(1, replyOnly("You can craft birch planks."));
+		PlannerExecutionResult firstResult = awaitResult(orchestrator);
+		assertTrue(firstResult.succeeded());
+
+		orchestrator.recordAssistantTurn(new DialogueTurn("agent", firstResult.response().replyText(), 11L, 1_100L));
+		orchestrator.onAcceptedReplyRecorded();
+
+		orchestrator.submit(requestAt(20L, 2_000L, "Alice", "@agent craft them"));
+		awaitBackendCallCount(orchestrator, backend, 3, Duration.ofSeconds(1));
+
+		LlmConversation secondPrompt = backend.conversation(2);
+		LlmChatMessage replayedToolRequest = secondPrompt.messages().stream()
+			.filter(message -> "assistant".equals(message.role()) && message.rawContentOverride() != null)
+			.filter(message -> message.rawContentOverride().toString().contains("inspect_recipes"))
+			.findFirst()
+			.orElseThrow();
+		assertNotNull(replayedToolRequest);
+
+		LlmChatMessage replayedToolResult = secondPrompt.messages().stream()
+			.filter(message -> message.kind() == LlmMessageKind.TOOL_RESULT)
+			.findFirst()
+			.orElseThrow();
+		assertTrue(replayedToolResult.content().contains("birch_wood_to_birch_planks"));
+	}
+
+	@Test
 	void toolFollowUpConversationReplaysRawAssistantContentBeforeToolResult() {
 		RecordingBackend backend = new RecordingBackend();
 		StubVisionTool visionTool = new StubVisionTool(
@@ -1124,7 +1253,16 @@ class PlannerOrchestratorTest {
 	}
 
 	private static PlannerOrchestrator newOrchestrator(LlmBackend backend, CurrentViewVisionTool visionTool, PlannerVisionMode visionMode) {
-		return newOrchestrator(backend, visionTool, visionMode, 3, Clock.systemDefaultZone());
+		return newOrchestrator(backend, visionTool, CurrentInventoryTool.disabled(), visionMode);
+	}
+
+	private static PlannerOrchestrator newOrchestrator(
+		LlmBackend backend,
+		CurrentViewVisionTool visionTool,
+		CurrentInventoryTool inventoryTool,
+		PlannerVisionMode visionMode
+	) {
+		return newOrchestrator(backend, visionTool, inventoryTool, visionMode, 3, Clock.systemDefaultZone());
 	}
 
 	private static PlannerOrchestrator newOrchestrator(
@@ -1134,16 +1272,12 @@ class PlannerOrchestratorTest {
 		int plannerSessionMaxConcurrentAttempts,
 		Clock clock
 	) {
-		AgentConfig.LlmConfig config = AgentConfig.LlmConfig.defaults();
 		return newOrchestrator(
 			backend,
 			visionTool,
+			CurrentInventoryTool.disabled(),
 			visionMode,
 			plannerSessionMaxConcurrentAttempts,
-			config.plannerSessionCoalesceStepMillis(),
-			config.plannerSessionCoalesceMinMillis(),
-			config.plannerSessionCoalesceMaxMillis(),
-			config.plannerPendingSemanticEventCap(),
 			clock
 		);
 	}
@@ -1159,12 +1293,62 @@ class PlannerOrchestratorTest {
 		int plannerPendingSemanticEventCap,
 		Clock clock
 	) {
+		return newOrchestrator(
+			backend,
+			visionTool,
+			CurrentInventoryTool.disabled(),
+			visionMode,
+			plannerSessionMaxConcurrentAttempts,
+			plannerSessionCoalesceStepMillis,
+			plannerSessionCoalesceMinMillis,
+			plannerSessionCoalesceMaxMillis,
+			plannerPendingSemanticEventCap,
+			clock
+		);
+	}
+
+	private static PlannerOrchestrator newOrchestrator(
+		LlmBackend backend,
+		CurrentViewVisionTool visionTool,
+		CurrentInventoryTool inventoryTool,
+		PlannerVisionMode visionMode,
+		int plannerSessionMaxConcurrentAttempts,
+		Clock clock
+	) {
+		AgentConfig.LlmConfig config = AgentConfig.LlmConfig.defaults();
+		return newOrchestrator(
+			backend,
+			visionTool,
+			inventoryTool,
+			visionMode,
+			plannerSessionMaxConcurrentAttempts,
+			config.plannerSessionCoalesceStepMillis(),
+			config.plannerSessionCoalesceMinMillis(),
+			config.plannerSessionCoalesceMaxMillis(),
+			config.plannerPendingSemanticEventCap(),
+			clock
+		);
+	}
+
+	private static PlannerOrchestrator newOrchestrator(
+		LlmBackend backend,
+		CurrentViewVisionTool visionTool,
+		CurrentInventoryTool inventoryTool,
+		PlannerVisionMode visionMode,
+		int plannerSessionMaxConcurrentAttempts,
+		int plannerSessionCoalesceStepMillis,
+		int plannerSessionCoalesceMinMillis,
+		int plannerSessionCoalesceMaxMillis,
+		int plannerPendingSemanticEventCap,
+		Clock clock
+	) {
 		AgentConfig.LlmConfig config = AgentConfig.LlmConfig.defaults();
 		return new PlannerOrchestrator(
 			new PlannerExecutor(backend),
 			new PlannerCompactionService(new OpenAiCompatibleChatClient(config)),
 			new PlannerContextAggregator(clock, config.plannerCompactionTriggerTokens(), plannerPendingSemanticEventCap, visionMode),
 			visionTool,
+			inventoryTool,
 			visionMode,
 			config.visionImageDetail(),
 			plannerSessionMaxConcurrentAttempts,
@@ -1173,7 +1357,8 @@ class PlannerOrchestratorTest {
 			plannerSessionCoalesceMaxMillis,
 			clock,
 			NoopObservability.INSTANCE,
-			PlannerLifecycleListener.NO_OP
+			PlannerLifecycleListener.NO_OP,
+			new AgentDebugRecorder()
 		);
 	}
 
@@ -1340,6 +1525,38 @@ class PlannerOrchestratorTest {
 
 		private CompletableFuture<FirstPersonScreenshotService.CapturedScreenshot> captureFuture() {
 			return captureFuture;
+		}
+	}
+
+	private static final class StubInventoryTool implements CurrentInventoryTool {
+		private final String inventoryResult;
+		private final String recipeResult;
+		private int inventoryRequestCount;
+		private int recipeRequestCount;
+
+		private StubInventoryTool(String inventoryResult, String recipeResult) {
+			this.inventoryResult = inventoryResult;
+			this.recipeResult = recipeResult;
+		}
+
+		@Override
+		public CompletableFuture<String> inspectInventory(String prompt) {
+			inventoryRequestCount++;
+			return CompletableFuture.completedFuture(inventoryResult);
+		}
+
+		@Override
+		public CompletableFuture<String> inspectRecipes(String prompt) {
+			recipeRequestCount++;
+			return CompletableFuture.completedFuture(recipeResult);
+		}
+
+		private int inventoryRequestCount() {
+			return inventoryRequestCount;
+		}
+
+		private int recipeRequestCount() {
+			return recipeRequestCount;
 		}
 	}
 

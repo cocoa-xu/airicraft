@@ -13,6 +13,7 @@ import ai.moeru.airicraft.agent.job.ActiveJobType;
 import ai.moeru.airicraft.agent.observability.AgentObservability;
 import ai.moeru.airicraft.agent.observability.NoopObservability;
 import ai.moeru.airicraft.agent.observability.TraceSanitizer;
+import ai.moeru.airicraft.agent.tasks.CollectResourceTaskHandler;
 import ai.moeru.airicraft.agent.tasks.CollectResourceStepArgs;
 import ai.moeru.airicraft.agent.tasks.CraftRecipeStepArgs;
 import ai.moeru.airicraft.agent.tasks.DropItemsStepArgs;
@@ -132,7 +133,7 @@ public final class OpenAiCompatibleLlmBackend implements LlmBackend {
 				? payload.getAsJsonObject("eventPolicyChanges")
 				: null;
 			ActiveJobProposal activeJob = parseActiveJobProposal(intentObject, "activeJob");
-			String intentType = getString(intentObject, "type").orElse(activeJob == null ? "none" : "job_update").toLowerCase(Locale.ROOT);
+			String intentType = canonicalIntentType(getString(intentObject, "type"), activeJob);
 
 			PlannerIntent intent = new PlannerIntent(
 				intentType,
@@ -282,6 +283,33 @@ public final class OpenAiCompatibleLlmBackend implements LlmBackend {
 		}
 	}
 
+	private static String canonicalIntentType(Optional<String> wireType, ActiveJobProposal activeJob) {
+		if (wireType.isEmpty() || wireType.get().isBlank()) {
+			return activeJob == null ? "none" : "job_update";
+		}
+		String normalized = wireType.get().toLowerCase(Locale.ROOT);
+		if (activeJob != null && !isKnownIntentType(normalized)) {
+			return "job_update";
+		}
+		return normalized;
+	}
+
+	private static boolean isKnownIntentType(String intentType) {
+		return switch (intentType) {
+			case "set_goal",
+				"clear_goal",
+				"job_update",
+				"mission_update",
+				"submit_task",
+				"cancel_task",
+				"reply_only",
+				"ask_clarification",
+				"acknowledge_failure",
+				"none" -> true;
+			default -> false;
+		};
+	}
+
 	private static ActiveJobProposal parseActiveJobProposal(JsonObject object, String fieldName) {
 		if (object == null || !object.has(fieldName) || !object.get(fieldName).isJsonObject()) {
 			return null;
@@ -298,10 +326,18 @@ public final class OpenAiCompatibleLlmBackend implements LlmBackend {
 			case NAVIGATE_TO -> Optional.ofNullable(parseGoalPosition(jobObject, "position"))
 				.map(ActiveJobProposal::navigateTo)
 				.orElse(null);
-			case MINE_BLOCKS -> Optional.ofNullable(parseGoalMineSpec(jobObject, "mineSpec"))
-				.map(ActiveJobProposal::mineBlocks)
-				.orElse(null);
+			case MINE_BLOCKS -> {
+				GoalMineSpec mineSpec = parseGoalMineSpec(jobObject, "mineSpec");
+				if (mineSpec == null) {
+					yield null;
+				}
+				if (CollectResourceTaskHandler.matchesResourceKind(TaskResourceKind.WOOD_LOGS, mineSpec.blockIds())) {
+					yield ActiveJobProposal.collectResource(new TaskSpec(TaskType.COLLECT_RESOURCE, TaskResourceKind.WOOD_LOGS, mineSpec.quantity()));
+				}
+				yield ActiveJobProposal.mineBlocks(mineSpec);
+			}
 			case COLLECT_RESOURCE -> parseActiveCollectResourceProposal(jobObject);
+			case CRAFT_RECIPE -> parseActiveCraftRecipeProposal(jobObject);
 			case ASK_USER -> {
 				String prompt = getString(jobObject, "askPrompt").orElseGet(() -> getString(jobObject, "prompt").orElse(null));
 				yield prompt == null ? null : ActiveJobProposal.askUser(prompt);
@@ -321,6 +357,19 @@ public final class OpenAiCompatibleLlmBackend implements LlmBackend {
 			return null;
 		}
 		return ActiveJobProposal.collectResource(new TaskSpec(TaskType.COLLECT_RESOURCE, resourceKind.get(), quantity.get()));
+	}
+
+	private static ActiveJobProposal parseActiveCraftRecipeProposal(JsonObject jobObject) {
+		CraftRecipeStepArgs nestedCraftRecipe = parseCraftRecipeStepArgs(jobObject, "craftRecipe");
+		if (nestedCraftRecipe != null) {
+			return ActiveJobProposal.craftRecipe(nestedCraftRecipe);
+		}
+		Optional<String> recipeId = getString(jobObject, "recipeId");
+		Optional<Integer> times = getInt(jobObject, "times");
+		if (recipeId.isEmpty() || times.isEmpty()) {
+			return null;
+		}
+		return ActiveJobProposal.craftRecipe(new CraftRecipeStepArgs(recipeId.get(), times.get()));
 	}
 
 	private static TaskLedger parseTaskLedger(JsonObject object, String fieldName) {
@@ -438,8 +487,8 @@ public final class OpenAiCompatibleLlmBackend implements LlmBackend {
 		}
 		JsonObject argsObject = object.getAsJsonObject(fieldName);
 		Optional<String> recipeId = getString(argsObject, "recipeId");
-		Optional<Integer> quantity = getInt(argsObject, "quantity");
-		return recipeId.isPresent() && quantity.isPresent() ? new CraftRecipeStepArgs(recipeId.get(), quantity.get()) : null;
+		Optional<Integer> times = getInt(argsObject, "times");
+		return recipeId.isPresent() && times.isPresent() ? new CraftRecipeStepArgs(recipeId.get(), times.get()) : null;
 	}
 
 	private static OpenContainerStepArgs parseOpenContainerStepArgs(JsonObject object, String fieldName) {
