@@ -10,10 +10,15 @@ public record WorldTaskRequest(
 	String sourceJobId,
 	WorldTaskType type,
 	GoalSnapshot goal,
-	CraftRecipeStepArgs craftRecipe
+	CraftRecipeStepArgs craftRecipe,
+	DropItemsStepArgs dropItems
 ) {
 	public WorldTaskRequest(String taskId, String sourceJobId, WorldTaskType type, GoalSnapshot goal) {
-		this(taskId, sourceJobId, type, goal, null);
+		this(taskId, sourceJobId, type, goal, null, null);
+	}
+
+	public WorldTaskRequest(String taskId, String sourceJobId, WorldTaskType type, GoalSnapshot goal, CraftRecipeStepArgs craftRecipe) {
+		this(taskId, sourceJobId, type, goal, craftRecipe, null);
 	}
 
 	public WorldTaskRequest {
@@ -22,6 +27,9 @@ public record WorldTaskRequest(
 		type = Objects.requireNonNull(type, "type");
 		if (type == WorldTaskType.CRAFT_RECIPE) {
 			craftRecipe = Objects.requireNonNull(craftRecipe, "craftRecipe");
+		}
+		else if (type == WorldTaskType.DROP_ITEMS) {
+			dropItems = Objects.requireNonNull(dropItems, "dropItems");
 		}
 		else {
 			goal = Objects.requireNonNull(goal, "goal");
@@ -37,7 +45,11 @@ public record WorldTaskRequest(
 	}
 
 	public static WorldTaskRequest craftRecipe(String taskId, String sourceJobId, CraftRecipeStepArgs craftRecipe) {
-		return new WorldTaskRequest(taskId, sourceJobId, WorldTaskType.CRAFT_RECIPE, null, craftRecipe);
+		return new WorldTaskRequest(taskId, sourceJobId, WorldTaskType.CRAFT_RECIPE, null, craftRecipe, null);
+	}
+
+	public static WorldTaskRequest dropItems(String taskId, String sourceJobId, DropItemsStepArgs dropItems) {
+		return new WorldTaskRequest(taskId, sourceJobId, WorldTaskType.DROP_ITEMS, null, null, dropItems);
 	}
 
 	private static WorldTaskType typeFor(GoalSnapshot goal) {

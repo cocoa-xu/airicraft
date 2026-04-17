@@ -14,6 +14,7 @@ import ai.moeru.airicraft.agent.session.SessionSnapshot;
 import ai.moeru.airicraft.agent.tasks.WorldTaskRequest;
 import ai.moeru.airicraft.agent.tasks.CollectResourceStepArgs;
 import ai.moeru.airicraft.agent.tasks.CraftRecipeStepArgs;
+import ai.moeru.airicraft.agent.tasks.DropItemsStepArgs;
 import ai.moeru.airicraft.agent.tasks.EvidenceKind;
 import ai.moeru.airicraft.agent.tasks.EvidenceRequirement;
 import ai.moeru.airicraft.agent.tasks.FinishStepArgs;
@@ -34,6 +35,9 @@ import ai.moeru.airicraft.agent.tasks.TaskTerminalEvent;
 import ai.moeru.airicraft.agent.tasks.WorldTaskExecutor;
 import ai.moeru.airicraft.agent.tasks.WorldTaskType;
 import ai.moeru.airicraft.agent.verification.VerificationStatus;
+import ai.moeru.airicraft.agent.llm.PlannerToolCall;
+import com.google.gson.JsonParser;
+import net.minecraft.util.math.Vec3d;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -159,6 +163,142 @@ class EmbodiedAgentRuntimeTest {
 		assertEquals(WorldTaskType.CRAFT_RECIPE, request.type());
 		assertEquals(craftRecipe, request.craftRecipe());
 		assertEquals(TaskState.RUNNING, runtime.taskSnapshot().state());
+	}
+
+	@Test
+	void dropItemsPlannerResponseRoutesWorldTaskRequest() {
+		FakeWorldTaskExecutor executor = new FakeWorldTaskExecutor();
+		EmbodiedAgentRuntime runtime = EmbodiedAgentRuntime.createForTests(executor);
+		runtime.overrideSessionSnapshotForTests(new SessionSnapshot(
+			SessionMode.REMOTE_MULTIPLAYER,
+			true,
+			true,
+			"minecraft:overworld",
+			false,
+			0,
+			0L
+		));
+		DropItemsStepArgs dropItems = new DropItemsStepArgs("minecraft:oak_log", 2, null);
+
+		runtime.injectDialogueResponseForTests(new DialogueResponse(
+			"Dropping logs.",
+			new DialogueIntent(DialogueIntentType.JOB_UPDATE, ActiveJobProposal.dropItems(dropItems)),
+			20L
+		));
+		runtime.onClientTick(null);
+
+		WorldTaskRequest request = executor.lastActiveTask.orElseThrow();
+		assertEquals(WorldTaskType.DROP_ITEMS, request.type());
+		assertEquals(dropItems, request.dropItems());
+		assertEquals(TaskState.RUNNING, runtime.taskSnapshot().state());
+	}
+
+	@Test
+	void dropItemsToolRoutesWorldTaskRequest() {
+		FakeWorldTaskExecutor executor = new FakeWorldTaskExecutor();
+		EmbodiedAgentRuntime runtime = EmbodiedAgentRuntime.createForTests(executor);
+		runtime.overrideSessionSnapshotForTests(new SessionSnapshot(
+			SessionMode.REMOTE_MULTIPLAYER,
+			true,
+			true,
+			"minecraft:overworld",
+			false,
+			0,
+			0L
+		));
+
+		String result = runtime.executePlannerToolCallForTests(new PlannerToolCall(
+			"call_drop",
+			"drop_items",
+			JsonParser.parseString("""
+				{"itemId":"minecraft:oak_log","quantity":2}
+				""").getAsJsonObject(),
+			null,
+			null
+		));
+		runtime.onClientTick(null);
+
+		WorldTaskRequest request = executor.lastActiveTask.orElseThrow();
+		assertTrue(result.contains("accepted"));
+		assertTrue(result.contains("queued"));
+		assertTrue(result.contains("does not mean completed"));
+		assertTrue(result.contains("TASK UPDATE"));
+		assertEquals(WorldTaskType.DROP_ITEMS, request.type());
+		assertEquals(new DropItemsStepArgs("minecraft:oak_log", 2, null), request.dropItems());
+	}
+
+	@Test
+	void givePlayerToolRejectsMissingNearbyTargetBeforeQueuingTask() {
+		FakeWorldTaskExecutor executor = new FakeWorldTaskExecutor();
+		EmbodiedAgentRuntime runtime = EmbodiedAgentRuntime.createForTests(executor);
+
+		String result = runtime.executePlannerToolCallForTests(new PlannerToolCall(
+			"call_give",
+			"give_player",
+			JsonParser.parseString("""
+				{"targetPlayer":"Alice","itemId":"minecraft:oak_log","quantity":2}
+				""").getAsJsonObject(),
+			null,
+			null
+		));
+
+		assertTrue(result.contains("target_not_nearby"));
+		assertTrue(executor.lastActiveTask.isEmpty());
+	}
+
+	@Test
+	void givePlayerToolRejectsFarTargetBeforeQueuingTask() {
+		FakeWorldTaskExecutor executor = new FakeWorldTaskExecutor();
+		EmbodiedAgentRuntime runtime = EmbodiedAgentRuntime.createForTests(executor);
+		runtime.injectNearbyPlayerForTests("Alice", new Vec3d(5.0D, 0.0D, 0.0D));
+
+		String result = runtime.executePlannerToolCallForTests(new PlannerToolCall(
+			"call_give",
+			"give_player",
+			JsonParser.parseString("""
+				{"targetPlayer":"Alice","itemId":"minecraft:oak_log","quantity":2}
+				""").getAsJsonObject(),
+			null,
+			null
+		));
+
+		assertTrue(result.contains("target_not_nearby"));
+		assertTrue(executor.lastActiveTask.isEmpty());
+	}
+
+	@Test
+	void givePlayerToolRoutesDropTaskForNearbyTarget() {
+		FakeWorldTaskExecutor executor = new FakeWorldTaskExecutor();
+		EmbodiedAgentRuntime runtime = EmbodiedAgentRuntime.createForTests(executor);
+		runtime.overrideSessionSnapshotForTests(new SessionSnapshot(
+			SessionMode.REMOTE_MULTIPLAYER,
+			true,
+			true,
+			"minecraft:overworld",
+			false,
+			0,
+			0L
+		));
+		runtime.injectNearbyPlayerForTests("Alice", new Vec3d(2.0D, 0.0D, 0.0D));
+
+		String result = runtime.executePlannerToolCallForTests(new PlannerToolCall(
+			"call_give",
+			"give_player",
+			JsonParser.parseString("""
+				{"targetPlayer":"Alice","itemId":"minecraft:oak_log","quantity":2}
+				""").getAsJsonObject(),
+			null,
+			null
+		));
+		runtime.onClientTick(null);
+
+		WorldTaskRequest request = executor.lastActiveTask.orElseThrow();
+		assertTrue(result.contains("accepted"));
+		assertTrue(result.contains("queued"));
+		assertTrue(result.contains("does not mean completed"));
+		assertTrue(result.contains("TASK UPDATE"));
+		assertEquals(WorldTaskType.DROP_ITEMS, request.type());
+		assertEquals(new DropItemsStepArgs("minecraft:oak_log", 2, "Alice"), request.dropItems());
 	}
 
 	@Test

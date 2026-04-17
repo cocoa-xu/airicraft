@@ -4,5 +4,6 @@ public enum WorldTaskType {
 	FOLLOW,
 	NAVIGATE,
 	MINE,
-	CRAFT_RECIPE
+	CRAFT_RECIPE,
+	DROP_ITEMS
 }

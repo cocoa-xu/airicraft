@@ -134,6 +134,35 @@ class PlannerToolCallInterfaceTest {
 	}
 
 	@Test
+	void exposesAndParsesItemDropTools() {
+		JsonArray tools = JsonParser.parseString(gson().toJson(PlannerToolCatalog.openAiTools())).getAsJsonArray();
+
+		assertTrue(toolNames(tools).contains("drop_items"));
+		assertTrue(toolNames(tools).contains("give_player"));
+		PlannerToolCall dropCall = PlannerToolCatalog.parseToolCall(toolCall("drop_items", """
+			{"itemId":"minecraft:oak_log","quantity":2}
+			"""));
+		PlannerToolCall giveCall = PlannerToolCatalog.parseToolCall(toolCall("give_player", """
+			{"targetPlayer":"Alice","itemId":"minecraft:oak_log","quantity":2}
+			"""));
+
+		assertEquals("drop_items", dropCall.name());
+		assertEquals("minecraft:oak_log", dropCall.arguments().get("itemId").getAsString());
+		assertEquals(2, dropCall.arguments().get("quantity").getAsInt());
+		assertEquals("give_player", giveCall.name());
+		assertEquals("Alice", giveCall.arguments().get("targetPlayer").getAsString());
+	}
+
+	@Test
+	void rejectsGivePlayerWithoutTargetPlayer() {
+		assertThrows(com.google.gson.JsonParseException.class, () ->
+			PlannerToolCatalog.parseToolCall(toolCall("give_player", """
+				{"itemId":"minecraft:oak_log","quantity":2}
+				"""))
+		);
+	}
+
+	@Test
 	void rejectsMultipleToolCallsInOneAssistantMessage() throws Exception {
 		AtomicReference<String> bodyRef = new AtomicReference<>();
 		try (TestServer server = TestServer.start(bodyRef, """
@@ -161,6 +190,27 @@ class PlannerToolCallInterfaceTest {
 			);
 			assertEquals(LlmFailureType.PARSE_ERROR, exception.failureType());
 		}
+	}
+
+	private static com.google.gson.Gson gson() {
+		return new com.google.gson.Gson();
+	}
+
+	private static List<String> toolNames(JsonArray tools) {
+		return tools.asList().stream()
+			.map(element -> element.getAsJsonObject().getAsJsonObject("function").get("name").getAsString())
+			.toList();
+	}
+
+	private static JsonObject toolCall(String name, String arguments) {
+		JsonObject function = new JsonObject();
+		function.addProperty("name", name);
+		function.addProperty("arguments", arguments);
+		JsonObject toolCall = new JsonObject();
+		toolCall.addProperty("id", "call_" + name);
+		toolCall.addProperty("type", "function");
+		toolCall.add("function", function);
+		return toolCall;
 	}
 
 	@Test

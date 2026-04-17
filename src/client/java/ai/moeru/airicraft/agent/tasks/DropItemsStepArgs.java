@@ -1,13 +1,16 @@
 package ai.moeru.airicraft.agent.tasks;
 
-import java.util.List;
-
 public record DropItemsStepArgs(
-	List<String> itemFilters,
-	int quantity
+	String itemId,
+	int quantity,
+	String targetPlayer
 ) {
 	public DropItemsStepArgs {
-		itemFilters = itemFilters == null ? List.of() : List.copyOf(itemFilters);
+		itemId = itemId == null ? null : itemId.trim();
+		targetPlayer = targetPlayer == null || targetPlayer.isBlank() ? null : targetPlayer.trim();
+		if (itemId == null || itemId.isBlank()) {
+			throw new IllegalArgumentException("itemId must not be blank");
+		}
 		if (quantity <= 0) {
 			throw new IllegalArgumentException("quantity must be positive");
 		}

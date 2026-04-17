@@ -7,5 +7,6 @@ public enum ActiveJobType {
 	MINE_BLOCKS,
 	COLLECT_RESOURCE,
 	CRAFT_RECIPE,
+	DROP_ITEMS,
 	ASK_USER
 }

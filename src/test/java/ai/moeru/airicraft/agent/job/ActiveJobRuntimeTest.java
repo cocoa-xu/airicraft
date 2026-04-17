@@ -4,6 +4,7 @@ import ai.moeru.airicraft.agent.dialogue.DialogueIntent;
 import ai.moeru.airicraft.agent.dialogue.DialogueIntentType;
 import ai.moeru.airicraft.agent.dialogue.DialogueResponse;
 import ai.moeru.airicraft.agent.tasks.CraftRecipeStepArgs;
+import ai.moeru.airicraft.agent.tasks.DropItemsStepArgs;
 import ai.moeru.airicraft.agent.tasks.WorldTaskRequest;
 import ai.moeru.airicraft.agent.tasks.WorldTaskType;
 import ai.moeru.airicraft.agent.tasks.TaskExecutionSnapshot;
@@ -132,6 +133,63 @@ class ActiveJobRuntimeTest {
 		assertNull(request.goal());
 		assertEquals(ActiveJobType.CRAFT_RECIPE, runtime.current().type());
 		assertEquals(craftRecipe, runtime.current().craftRecipe());
+	}
+
+	@Test
+	void dropItemsActiveJobProjectsWorldTaskRequest() {
+		ActiveJobRuntime runtime = new ActiveJobRuntime();
+		DropItemsStepArgs dropItems = new DropItemsStepArgs("minecraft:oak_log", 2, "Alice");
+
+		runtime.applyPlannerResponse(
+			new DialogueResponse(
+				"Dropping logs.",
+				new DialogueIntent(DialogueIntentType.JOB_UPDATE, ActiveJobProposal.dropItems(dropItems)),
+				1L
+			),
+			0,
+			"test",
+			1L
+		);
+
+		WorldTaskRequest request = runtime.activeTaskRequest().orElseThrow();
+
+		assertEquals(WorldTaskType.DROP_ITEMS, request.type());
+		assertEquals(dropItems, request.dropItems());
+		assertNull(request.goal());
+		assertEquals(ActiveJobType.DROP_ITEMS, runtime.current().type());
+		assertEquals(dropItems, runtime.current().dropItems());
+	}
+
+	@Test
+	void dropItemsPrimitiveJobIgnoresCompanionSessionGate() {
+		ActiveJobRuntime runtime = new ActiveJobRuntime();
+		DropItemsStepArgs dropItems = new DropItemsStepArgs("minecraft:oak_log", 2, null);
+		runtime.applyPlannerResponse(
+			new DialogueResponse(
+				"Dropping logs.",
+				new DialogueIntent(DialogueIntentType.JOB_UPDATE, ActiveJobProposal.dropItems(dropItems)),
+				1L
+			),
+			0,
+			"test",
+			1L
+		);
+		WorldTaskRequest request = runtime.activeTaskRequest().orElseThrow();
+		TaskExecutionSnapshot runningDrop = new TaskExecutionSnapshot(
+			TaskExecutionState.RUNNING,
+			request.taskId(),
+			null,
+			null,
+			"inventory_screen_dismissed",
+			null,
+			null
+		);
+
+		runtime.tick(runningDrop, evidence(4, 2L), false, false, 2L);
+
+		assertEquals(ActiveJobStatus.RUNNING, runtime.current().status());
+		assertNull(runtime.current().blockedReason());
+		assertEquals("inventory_screen_dismissed", runtime.missionExecutionSnapshot().primitiveExecution().lastPathEvent());
 	}
 
 	private static WorldEvidence evidence(int woodLogs, long tick) {

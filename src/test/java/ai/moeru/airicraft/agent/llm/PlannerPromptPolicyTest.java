@@ -33,4 +33,19 @@ class PlannerPromptPolicyTest {
 		assertTrue(prompt.contains("assistant content must be empty or null"));
 		assertTrue(prompt.contains("must be inspect_inventory.narration"));
 	}
+
+	@Test
+	void systemPromptExplainsDropAndGiveItemToolsUseExactInventoryIds() {
+		String prompt = PlannerPromptPolicy.systemPrompt(PlannerVisionMode.EXTERNAL_SUMMARY);
+
+		assertTrue(prompt.contains("drop_items"));
+		assertTrue(prompt.contains("give_player"));
+		assertTrue(prompt.contains("inspect_inventory"));
+		assertTrue(prompt.contains("itemCounts"));
+		assertTrue(prompt.contains("namespaced itemId"));
+		assertTrue(prompt.contains("4 blocks"));
+		assertTrue(prompt.contains("accepted action tool"));
+		assertTrue(prompt.contains("does not mean the action completed"));
+		assertTrue(prompt.contains("TASK UPDATE"));
+	}
 }

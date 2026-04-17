@@ -22,6 +22,8 @@ public final class PlannerToolCatalog {
 	public static final String MINE_BLOCKS = "mine_blocks";
 	public static final String COLLECT_RESOURCE = "collect_resource";
 	public static final String CRAFT_RECIPE = "craft_recipe";
+	public static final String DROP_ITEMS = "drop_items";
+	public static final String GIVE_PLAYER = "give_player";
 	public static final String CANCEL_TASK = "cancel_task";
 	public static final String CLEAR_GOAL = "clear_goal";
 	public static final String UPDATE_EVENT_POLICY = "update_event_policy";
@@ -69,6 +71,17 @@ public final class PlannerToolCatalog {
 				prop("recipeId", string("Exact recipe id from inspect_recipes.")),
 				prop("times", integer("Recipe run count."))
 			), List.of("recipeId", "times")),
+			tool(DROP_ITEMS, "Drop exact items from current inventory at the current position.", properties(
+				prop("narration", optionalString("Optional visible narration before using the tool. Omit this field when no narration is needed.")),
+				prop("itemId", string("Exact namespaced item id from inspect_inventory itemCounts.")),
+				prop("quantity", integer("Number of items to drop."))
+			), List.of("itemId", "quantity")),
+			tool(GIVE_PLAYER, "Drop exact items for a named nearby player to pick up.", properties(
+				prop("narration", optionalString("Optional visible narration before using the tool. Omit this field when no narration is needed.")),
+				prop("targetPlayer", string("Nearby player name receiving the items.")),
+				prop("itemId", string("Exact namespaced item id from inspect_inventory itemCounts.")),
+				prop("quantity", integer("Number of items to drop."))
+			), List.of("targetPlayer", "itemId", "quantity")),
 			tool(CANCEL_TASK, "Cancel the current task or job.", properties(
 				prop("narration", optionalString("Optional visible narration before using the tool. Omit this field when no narration is needed.")),
 				prop("reason", string("Optional cancellation reason."))
@@ -153,6 +166,8 @@ public final class PlannerToolCatalog {
 				MINE_BLOCKS,
 				COLLECT_RESOURCE,
 				CRAFT_RECIPE,
+				DROP_ITEMS,
+				GIVE_PLAYER,
 				CANCEL_TASK,
 				CLEAR_GOAL,
 				UPDATE_EVENT_POLICY -> true;
@@ -208,6 +223,15 @@ public final class PlannerToolCatalog {
 			case CRAFT_RECIPE -> {
 				requireString(arguments, "recipeId");
 				requirePositiveInt(arguments, "times");
+			}
+			case DROP_ITEMS -> {
+				requireString(arguments, "itemId");
+				requirePositiveInt(arguments, "quantity");
+			}
+			case GIVE_PLAYER -> {
+				requireString(arguments, "targetPlayer");
+				requireString(arguments, "itemId");
+				requirePositiveInt(arguments, "quantity");
 			}
 			case CANCEL_TASK -> {
 			}

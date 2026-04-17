@@ -93,6 +93,7 @@ import ai.moeru.airicraft.agent.tasks.TaskType;
 import ai.moeru.airicraft.agent.tasks.WorldEvidence;
 import ai.moeru.airicraft.agent.tasks.WorldTaskExecutor;
 import ai.moeru.airicraft.agent.tasks.CraftRecipeStepArgs;
+import ai.moeru.airicraft.agent.tasks.DropItemsStepArgs;
 import ai.moeru.airicraft.agent.verification.VerificationReport;
 import ai.moeru.airicraft.agent.verification.VerificationRunner;
 import ai.moeru.airicraft.agent.verification.VerificationPlayerProbe;
@@ -920,6 +921,10 @@ public final class EmbodiedAgentRuntime {
 		this.sessionSnapshot = sessionSnapshot == null ? SessionSnapshot.initial() : sessionSnapshot;
 	}
 
+	void injectNearbyPlayerForTests(String playerName, Vec3d pos) {
+		nearbyPlayerTracker.injectPlayerNearby(playerName, pos, tickCount, eventBuffer);
+	}
+
 	void injectGoalForTests(GoalSnapshot goalSnapshot) {
 		if (goalSnapshot == null) {
 			activeJobRuntime.clear();
@@ -995,6 +1000,26 @@ public final class EmbodiedAgentRuntime {
 				applyPlannerJobTool(ActiveJobProposal.craftRecipe(craftRecipe));
 				yield "Tool result for craft_recipe: accepted recipeId=" + craftRecipe.recipeId() + " times=" + craftRecipe.times();
 			}
+			case PlannerToolCatalog.DROP_ITEMS -> {
+				DropItemsStepArgs dropItems = new DropItemsStepArgs(
+					stringArg(args, "itemId").orElseThrow(() -> new IllegalArgumentException("itemId is required")),
+					intArg(args, "quantity").orElseThrow(() -> new IllegalArgumentException("quantity is required")),
+					null
+				);
+				applyPlannerJobTool(ActiveJobProposal.dropItems(dropItems));
+				yield queuedActionToolResult("drop_items", "itemId=" + dropItems.itemId() + " quantity=" + dropItems.quantity());
+			}
+			case PlannerToolCatalog.GIVE_PLAYER -> {
+				String targetPlayer = stringArg(args, "targetPlayer").orElseThrow(() -> new IllegalArgumentException("targetPlayer is required"));
+				ensureGiveTargetNearby(targetPlayer);
+				DropItemsStepArgs dropItems = new DropItemsStepArgs(
+					stringArg(args, "itemId").orElseThrow(() -> new IllegalArgumentException("itemId is required")),
+					intArg(args, "quantity").orElseThrow(() -> new IllegalArgumentException("quantity is required")),
+					targetPlayer
+				);
+				applyPlannerJobTool(ActiveJobProposal.dropItems(dropItems));
+				yield queuedActionToolResult("give_player", "targetPlayer=" + targetPlayer + " itemId=" + dropItems.itemId() + " quantity=" + dropItems.quantity());
+			}
 			case PlannerToolCatalog.CANCEL_TASK -> {
 				String reason = stringArg(args, "reason").orElse("planner_tool_cancelled");
 				TaskSnapshot snapshot = cancelTask(reason);
@@ -1015,6 +1040,15 @@ public final class EmbodiedAgentRuntime {
 		};
 	}
 
+	private static String queuedActionToolResult(String toolName, String details) {
+		return "Tool result for " + toolName + ": accepted queued " + details
+			+ ". Accepted does not mean completed. Wait for TASK UPDATE before saying the action completed.";
+	}
+
+	String executePlannerToolCallForTests(PlannerToolCall toolCall) {
+		return executePlannerToolCall(toolCall).join();
+	}
+
 	private void emitPlannerToolNarration(PlannerToolCall toolCall) {
 		if (toolCall == null || toolCall.narration() == null || toolCall.narration().isBlank()) {
 			return;
@@ -1032,6 +1066,25 @@ public final class EmbodiedAgentRuntime {
 		applyTaskIntent(response, currentWorldEvidence(MinecraftClient.getInstance()), "planner_tool");
 		recordPlannerOutcome(response, previousGoal, activeGoal());
 		drainEventPipeline();
+	}
+
+	private void ensureGiveTargetNearby(String targetPlayer) {
+		NearbyPlayerSnapshot target = nearbyPlayerTracker.findByName(targetPlayer)
+			.orElseThrow(() -> new IllegalStateException("target_not_nearby"));
+		Vec3d selfPos = currentPlayerPosition();
+		Vec3d targetPos = new Vec3d(target.x(), target.y(), target.z());
+		if (selfPos.squaredDistanceTo(targetPos) > 16.0D) {
+			throw new IllegalStateException("target_not_nearby");
+		}
+	}
+
+	private Vec3d currentPlayerPosition() {
+		MinecraftClient client = MinecraftClient.getInstance();
+		if (client != null && client.player != null) {
+			return new Vec3d(client.player.getX(), client.player.getY(), client.player.getZ());
+		}
+		WorldEvidence evidence = currentWorldEvidence(client);
+		return new Vec3d(evidence.x(), evidence.y(), evidence.z());
 	}
 
 	private void applyPlannerClearGoalTool() {
@@ -1884,7 +1937,7 @@ public final class EmbodiedAgentRuntime {
 		}
 		return switch (intent.activeJob().type()) {
 			case FOLLOW_PLAYER, NAVIGATE_TO, MINE_BLOCKS -> true;
-			case IDLE, COLLECT_RESOURCE, CRAFT_RECIPE, ASK_USER -> false;
+			case IDLE, COLLECT_RESOURCE, CRAFT_RECIPE, DROP_ITEMS, ASK_USER -> false;
 		};
 	}
 
@@ -1897,6 +1950,7 @@ public final class EmbodiedAgentRuntime {
 		}
 		return snapshot.activeStepKind() == ai.moeru.airicraft.agent.tasks.LedgerStepKind.COLLECT_RESOURCE
 			|| snapshot.activeStepKind() == ai.moeru.airicraft.agent.tasks.LedgerStepKind.CRAFT_RECIPE
+			|| snapshot.activeStepKind() == ai.moeru.airicraft.agent.tasks.LedgerStepKind.DROP_ITEMS
 			|| snapshot.activeStepKind() == ai.moeru.airicraft.agent.tasks.LedgerStepKind.ASK_USER;
 	}
 
