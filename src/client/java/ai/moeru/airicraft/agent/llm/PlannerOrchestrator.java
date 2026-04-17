@@ -31,6 +31,8 @@ public final class PlannerOrchestrator {
 	private static final String VISUAL_TOOL_NAME = "take_a_look";
 	private static final String INVENTORY_TOOL_NAME = "inspect_inventory";
 	private static final String RECIPES_TOOL_NAME = "inspect_recipes";
+	private static final String INVENTORY_BOOTSTRAP_TOOL_CALL_ID = "bootstrap_inspect_inventory";
+	private static final String INVENTORY_BOOTSTRAP_PROMPT = "startup inventory context";
 	private static final String NATIVE_TOOL_RESULT_TEXT = "Tool result for take_a_look: current first-person view attached.";
 	private static final int SESSION_MAX_ATTEMPTS = 2;
 	private static final long SESSION_RETRY_BACKOFF_MS = 250L;
@@ -72,6 +74,7 @@ public final class PlannerOrchestrator {
 	private PlannerConversationDebugSnapshot lastSubmittedConversation = PlannerConversationDebugSnapshot.empty();
 	private PlannerConversationDebugSnapshot lastVisibleConversation = PlannerConversationDebugSnapshot.empty();
 	private Context turnContext;
+	private boolean inventoryBootstrapPending = true;
 
 	public PlannerOrchestrator(
 		PlannerExecutor plannerExecutor,
@@ -789,6 +792,7 @@ public final class PlannerOrchestrator {
 		lastCompactionResult = null;
 		awaitingAcceptedReplyRecord = false;
 		pendingAcceptedAssistantRawContent = null;
+		inventoryBootstrapPending = true;
 		lastSubmittedConversation = PlannerConversationDebugSnapshot.empty();
 		lastVisibleConversation = PlannerConversationDebugSnapshot.empty();
 		debugRecorder.recordConversationSources(lastSubmittedConversation, lastVisibleConversation);
@@ -807,6 +811,7 @@ public final class PlannerOrchestrator {
 		lastCompactionResult = null;
 		awaitingAcceptedReplyRecord = false;
 		pendingAcceptedAssistantRawContent = null;
+		inventoryBootstrapPending = true;
 		lastSubmittedConversation = PlannerConversationDebugSnapshot.empty();
 		lastVisibleConversation = PlannerConversationDebugSnapshot.empty();
 		debugRecorder.recordConversationSources(lastSubmittedConversation, lastVisibleConversation);
@@ -864,8 +869,87 @@ public final class PlannerOrchestrator {
 		if (snapshot == null) {
 			return true;
 		}
+		snapshot = withInventoryBootstrapIfAvailable(snapshot);
 		sessionCoordinator.submit(snapshot);
 		return true;
+	}
+
+	private PlannerContextSnapshot withInventoryBootstrapIfAvailable(PlannerContextSnapshot snapshot) {
+		if (!inventoryBootstrapPending || snapshot == null || snapshot.mode() != PlannerSnapshotMode.TRIGGERED) {
+			return snapshot;
+		}
+		if (!isWorldLoadedSession(snapshot.request().sessionMode())) {
+			return snapshot;
+		}
+		CompletableFuture<String> future;
+		try {
+			future = inventoryTool.inspectInventory(INVENTORY_BOOTSTRAP_PROMPT);
+		}
+		catch (RuntimeException exception) {
+			Airicraft.LOGGER.warn("Inventory bootstrap request failed before submission", exception);
+			return snapshot;
+		}
+		if (future == null || !future.isDone()) {
+			return snapshot;
+		}
+		String toolResult;
+		try {
+			toolResult = future.join();
+		}
+		catch (RuntimeException exception) {
+			Airicraft.LOGGER.warn("Inventory bootstrap request failed", exception);
+			return snapshot;
+		}
+		inventoryBootstrapPending = false;
+		return new PlannerContextSnapshot(
+			snapshot.request(),
+			snapshot.mode(),
+			snapshot.triggerBatch(),
+			withInventoryBootstrap(snapshot.plannerConversation(), toolResult),
+			snapshot.includedSemanticEventSeqNoUpperBound(),
+			snapshot.includedSemanticGapVersion(),
+			snapshot.renderedAmbientContext(),
+			snapshot.renderedTimeContextAtMs()
+		);
+	}
+
+	private static boolean isWorldLoadedSession(SessionMode mode) {
+		return mode == SessionMode.SINGLEPLAYER_LOCAL
+			|| mode == SessionMode.SINGLEPLAYER_LAN_HOST
+			|| mode == SessionMode.REMOTE_MULTIPLAYER;
+	}
+
+	private static LlmConversation withInventoryBootstrap(LlmConversation conversation, String toolResult) {
+		ArrayList<LlmChatMessage> messages = new ArrayList<>();
+		List<LlmChatMessage> existingMessages = conversation == null ? List.of() : conversation.messages();
+		if (!existingMessages.isEmpty()) {
+			messages.add(existingMessages.get(0));
+		}
+		messages.add(LlmChatMessage.assistantToolCall("", inventoryBootstrapToolCall()));
+		messages.add(LlmChatMessage.tool(INVENTORY_BOOTSTRAP_TOOL_CALL_ID, inventoryBootstrapToolResultContent(toolResult)));
+		if (existingMessages.size() > 1) {
+			messages.addAll(existingMessages.subList(1, existingMessages.size()));
+		}
+		return LlmConversation.of(messages);
+	}
+
+	private static PlannerToolCall inventoryBootstrapToolCall() {
+		JsonObject arguments = new JsonObject();
+		arguments.addProperty("prompt", INVENTORY_BOOTSTRAP_PROMPT);
+		return new PlannerToolCall(
+			INVENTORY_BOOTSTRAP_TOOL_CALL_ID,
+			INVENTORY_TOOL_NAME,
+			arguments,
+			null,
+			null
+		);
+	}
+
+	private static String inventoryBootstrapToolResultContent(String toolResult) {
+		if (toolResult == null || toolResult.isBlank()) {
+			return "Tool result for inspect_inventory: none";
+		}
+		return toolResult;
 	}
 
 	private void acceptGeneration(PlannerExecutionResult acceptedResult) {

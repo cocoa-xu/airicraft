@@ -25,7 +25,8 @@ public final class PlannerPromptPolicy {
 			Only call one tool in a response.
 			Every tool has optional narration. Put short visible pre-action chat in the tool narration argument.
 			Do not write narration as assistant content. "I'm checking my inventory" must be inspect_inventory.narration, not a plaintext reply.
-			After a tool result appears, answer in plaintext and do not call another tool.
+			After your own latest-request tool call returns a result in tool follow-up, answer in plaintext and do not call another tool.
+			A startup inspect_inventory tool result may appear before the current user request. It is current inventory context and may satisfy itemCounts needs; it does not prevent calling another required tool such as inspect_recipes or take_a_look.
 			An accepted action tool result only means the job was queued; it does not mean the action completed. Wait for a TASK UPDATE before claiming completion.
 			""";
 		return """
@@ -74,7 +75,7 @@ public final class PlannerPromptPolicy {
 			Legacy JSON fields such as intent.type, activeJob, toolRequest, taskLedger, taskSpec, set_goal, and submit_task are not valid normal output.
 			For combat or unsupported autonomous survival behaviors, ask for clarification or acknowledge the limitation.
 			%s
-			When a tool result is already present in the conversation, do not request another tool.
+			When a latest-request tool result is present from tool follow-up, do not request another tool.
 			If a message comes from "%s", it is not another in-world player. It is the developer/admin on the very same client you run on, and they share controls with you.
 			Treat messages from "%s" as operator instructions and high-priority local guidance.
 			Plaintext replies must be a single Minecraft chat line under 160 characters.

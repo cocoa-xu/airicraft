@@ -127,6 +127,122 @@ class PlannerOrchestratorTest {
 	}
 
 	@Test
+	void freshInWorldPlannerSubmissionIncludesInventoryBootstrap() {
+		RecordingBackend backend = new RecordingBackend();
+		StubInventoryTool inventoryTool = new StubInventoryTool(
+			"Tool result for inspect_inventory: itemCounts={minecraft:red_dye=1}",
+			"unused"
+		);
+		PlannerOrchestrator orchestrator = newOrchestrator(
+			backend,
+			CurrentViewVisionTool.disabled(),
+			inventoryTool,
+			PlannerVisionMode.EXTERNAL_SUMMARY
+		);
+
+		orchestrator.submit(inWorldRequestAt(10L, 1_000L, "Alice", "@agent give me the red dye"));
+		backend.awaitCalls(1, Duration.ofSeconds(1));
+		LlmConversation conversation = backend.conversation(0);
+
+		assertInventoryBootstrap(conversation, "minecraft:red_dye=1");
+		assertTrue(terminalPrompt(conversation).contains("@agent give me the red dye"));
+
+		backend.succeed(0, replyOnly(""));
+		PlannerExecutionResult result = awaitResult(orchestrator);
+		assertTrue(result.succeeded());
+		assertEquals(1, inventoryTool.inventoryRequestCount());
+		assertEquals(0, inventoryTool.recipeRequestCount());
+	}
+
+	@Test
+	void inventoryBootstrapRunsOnlyOncePerPlannerLifecycle() {
+		RecordingBackend backend = new RecordingBackend();
+		StubInventoryTool inventoryTool = new StubInventoryTool(
+			"Tool result for inspect_inventory: itemCounts={minecraft:red_dye=1}",
+			"unused"
+		);
+		PlannerOrchestrator orchestrator = newOrchestrator(
+			backend,
+			CurrentViewVisionTool.disabled(),
+			inventoryTool,
+			PlannerVisionMode.EXTERNAL_SUMMARY
+		);
+
+		orchestrator.submit(inWorldRequestAt(10L, 1_000L, "Alice", "@agent status"));
+		backend.awaitCalls(1, Duration.ofSeconds(1));
+		assertEquals(1, inventoryBootstrapCount(backend.conversation(0)));
+		backend.succeed(0, replyOnly(""));
+		assertTrue(awaitResult(orchestrator).succeeded());
+
+		orchestrator.submit(inWorldRequestAt(20L, 2_000L, "Alice", "@agent status again"));
+		backend.awaitCalls(2, Duration.ofSeconds(1));
+
+		assertEquals(0, inventoryBootstrapCount(backend.conversation(1)));
+		assertEquals(1, inventoryTool.inventoryRequestCount());
+		backend.succeed(1, replyOnly(""));
+		assertTrue(awaitResult(orchestrator).succeeded());
+	}
+
+	@Test
+	void resetRearmsInventoryBootstrap() {
+		RecordingBackend backend = new RecordingBackend();
+		StubInventoryTool inventoryTool = new StubInventoryTool(
+			"Tool result for inspect_inventory: itemCounts={minecraft:red_dye=1}",
+			"unused"
+		);
+		PlannerOrchestrator orchestrator = newOrchestrator(
+			backend,
+			CurrentViewVisionTool.disabled(),
+			inventoryTool,
+			PlannerVisionMode.EXTERNAL_SUMMARY
+		);
+
+		orchestrator.submit(inWorldRequestAt(10L, 1_000L, "Alice", "@agent status"));
+		backend.awaitCalls(1, Duration.ofSeconds(1));
+		backend.succeed(0, replyOnly(""));
+		assertTrue(awaitResult(orchestrator).succeeded());
+
+		orchestrator.reset();
+		orchestrator.submit(inWorldRequestAt(20L, 2_000L, "Alice", "@agent status again"));
+		backend.awaitCalls(2, Duration.ofSeconds(1));
+
+		assertEquals(1, inventoryBootstrapCount(backend.conversation(1)));
+		assertEquals(2, inventoryTool.inventoryRequestCount());
+		backend.succeed(1, replyOnly(""));
+		assertTrue(awaitResult(orchestrator).succeeded());
+	}
+
+	@Test
+	void outOfWorldSubmissionDoesNotConsumeInventoryBootstrap() {
+		RecordingBackend backend = new RecordingBackend();
+		StubInventoryTool inventoryTool = new StubInventoryTool(
+			"Tool result for inspect_inventory: itemCounts={minecraft:red_dye=1}",
+			"unused"
+		);
+		PlannerOrchestrator orchestrator = newOrchestrator(
+			backend,
+			CurrentViewVisionTool.disabled(),
+			inventoryTool,
+			PlannerVisionMode.EXTERNAL_SUMMARY
+		);
+
+		orchestrator.submit(requestAt(10L, 1_000L, "Alice", "@agent status"));
+		backend.awaitCalls(1, Duration.ofSeconds(1));
+		assertEquals(0, inventoryBootstrapCount(backend.conversation(0)));
+		assertEquals(0, inventoryTool.inventoryRequestCount());
+		backend.succeed(0, replyOnly(""));
+		assertTrue(awaitResult(orchestrator).succeeded());
+
+		orchestrator.submit(inWorldRequestAt(20L, 2_000L, "Alice", "@agent status again"));
+		backend.awaitCalls(2, Duration.ofSeconds(1));
+
+		assertInventoryBootstrap(backend.conversation(1), "minecraft:red_dye=1");
+		assertEquals(1, inventoryTool.inventoryRequestCount());
+		backend.succeed(1, replyOnly(""));
+		assertTrue(awaitResult(orchestrator).succeeded());
+	}
+
+	@Test
 	void singleToolCallFeedsRecipeInspectionBackIntoPlanner() {
 		OpenAiCompatibleLlmBackend backend = new OpenAiCompatibleLlmBackend(AgentConfig.LlmConfig.defaults());
 		backend.injectMockResponse(new PlannerResponse(
@@ -1333,6 +1449,19 @@ class PlannerOrchestratorTest {
 		);
 	}
 
+	private static PlannerRequest inWorldRequestAt(long tick, long timestampMs, String sender, String message) {
+		return new PlannerRequest(
+			tick,
+			timestampMs,
+			SessionMode.SINGLEPLAYER_LOCAL,
+			"Alice",
+			null,
+			sender,
+			message,
+			null
+		);
+	}
+
 	private static PlannerResponse replyOnly(String text) {
 		return new PlannerResponse(text, new PlannerIntent("reply_only", null, null));
 	}
@@ -1892,6 +2021,29 @@ class PlannerOrchestratorTest {
 			.filter(message -> textFragment == null || message.text().contains(textFragment))
 			.findFirst()
 			.orElse(null);
+	}
+
+	private static void assertInventoryBootstrap(LlmConversation conversation, String expectedInventoryFragment) {
+		assertTrue(conversation.messages().size() >= 3, "Expected bootstrap messages after system prompt");
+		LlmChatMessage toolCallMessage = conversation.messages().get(1);
+		LlmChatMessage toolResultMessage = conversation.messages().get(2);
+		assertEquals("assistant", toolCallMessage.role());
+		assertTrue(toolCallMessage.hasToolCalls());
+		assertEquals("bootstrap_inspect_inventory", toolCallMessage.toolCalls().get(0).id());
+		assertEquals("inspect_inventory", toolCallMessage.toolCalls().get(0).name());
+		assertEquals("startup inventory context", toolCallMessage.toolCalls().get(0).arguments().get("prompt").getAsString());
+		assertEquals("tool", toolResultMessage.role());
+		assertEquals("bootstrap_inspect_inventory", toolResultMessage.toolCallId());
+		assertTrue(toolResultMessage.content().contains(expectedInventoryFragment), () -> "Unexpected bootstrap inventory result: " + toolResultMessage.content());
+	}
+
+	private static long inventoryBootstrapCount(LlmConversation conversation) {
+		return conversation.messages().stream()
+			.filter(message -> "assistant".equals(message.role()))
+			.filter(LlmChatMessage::hasToolCalls)
+			.flatMap(message -> message.toolCalls().stream())
+			.filter(toolCall -> "bootstrap_inspect_inventory".equals(toolCall.id()))
+			.count();
 	}
 
 	private static String terminalPrompt(LlmConversation conversation) {

@@ -48,4 +48,15 @@ class PlannerPromptPolicyTest {
 		assertTrue(prompt.contains("does not mean the action completed"));
 		assertTrue(prompt.contains("TASK UPDATE"));
 	}
+
+	@Test
+	void systemPromptDistinguishesStartupInventoryFromLatestToolFollowUp() {
+		String prompt = PlannerPromptPolicy.systemPrompt(PlannerVisionMode.EXTERNAL_SUMMARY);
+
+		assertTrue(prompt.contains("startup inspect_inventory"));
+		assertTrue(prompt.contains("current inventory context"));
+		assertTrue(prompt.contains("does not prevent calling another required tool"));
+		assertTrue(prompt.contains("latest-request tool call"));
+		assertTrue(prompt.contains("tool follow-up"));
+	}
 }
