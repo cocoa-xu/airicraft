@@ -64,6 +64,7 @@ import ai.moeru.airicraft.agent.llm.PlannerToolCall;
 import ai.moeru.airicraft.agent.llm.PlannerToolCatalog;
 import ai.moeru.airicraft.agent.llm.PlannerTriggerType;
 import ai.moeru.airicraft.agent.llm.VisionDescription;
+import ai.moeru.airicraft.agent.session.AutoLanOpenState;
 import ai.moeru.airicraft.agent.session.LanHostingService;
 import ai.moeru.airicraft.agent.session.SessionSnapshot;
 import ai.moeru.airicraft.agent.session.SessionRuntime;
@@ -156,6 +157,7 @@ public final class EmbodiedAgentRuntime {
 	private final SingleplayerWorldService singleplayerWorldService = new SingleplayerWorldService();
 	private final SessionRuntime sessionRuntime = new SessionRuntime();
 	private final LanHostingService lanHostingService = new LanHostingService();
+	private final AutoLanOpenState autoLanOpenState = new AutoLanOpenState();
 	private final AgentObservability observability;
 	private final AgentDebugRecorder debugRecorder = new AgentDebugRecorder();
 	private final SemanticEventBuffer eventBuffer = new SemanticEventBuffer(512);
@@ -304,6 +306,7 @@ public final class EmbodiedAgentRuntime {
 	public void onWorldLeave() {
 		sessionRuntime.onWorldLeave(tickCount, eventBuffer);
 		sessionSnapshot = sessionRuntime.snapshot();
+		autoLanOpenState.clear();
 		localDamageTracker.clear();
 		sessionSnapshotOverrideForTests = null;
 		nearbyPlayerTracker.clear(tickCount, eventBuffer);
@@ -340,6 +343,7 @@ public final class EmbodiedAgentRuntime {
 			worldLoadTick = tickCount;
 			localDamageTracker.onLifecycleReset(tickCount);
 		}
+		openLanIfSingleplayerLocal(client);
 
 		nearbyPlayerTracker.poll(client, tickCount, eventBuffer);
 		primaryInteractionResolver.current().ifPresent(current ->
@@ -424,11 +428,35 @@ public final class EmbodiedAgentRuntime {
 		lastKnownPlayerHealth = currentPlayerHealth(client);
 	}
 
+	private void openLanIfSingleplayerLocal(MinecraftClient client) {
+		if (!autoLanOpenState.shouldAttempt(sessionSnapshot)) {
+			return;
+		}
+
+		try {
+			lanHostingService.openLan(sessionSnapshot);
+			if (sessionSnapshotOverrideForTests == null) {
+				sessionSnapshot = sessionRuntime.poll(client, tickCount, eventBuffer);
+			}
+		}
+		catch (LanHostingService.LanHostingException exception) {
+			if ("minecraft_unavailable".equals(exception.code())) {
+				return;
+			}
+			autoLanOpenState.recordFailure();
+			eventBuffer.append(tickCount, "session.lan_open_failed", Map.of(
+				"errorCode", exception.code(),
+				"message", exception.getMessage()
+			));
+		}
+	}
+
 	public void shutdown() {
 		initialized = false;
 		tickCount = 0L;
 		worldLoadTick = -1L;
 		sessionSnapshotOverrideForTests = null;
+		autoLanOpenState.clear();
 		verificationRunner.reset();
 		localDamageTracker.clear();
 		nearbyPlayerTracker.clear(tickCount, eventBuffer);

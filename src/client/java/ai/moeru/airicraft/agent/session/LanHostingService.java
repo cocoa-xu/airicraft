@@ -2,7 +2,6 @@ package ai.moeru.airicraft.agent.session;
 
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.world.GameMode;
-import net.minecraft.util.NetworkUtils;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -18,13 +17,15 @@ public final class LanHostingService {
 			throw new LanHostingException("minecraft_unavailable", "Minecraft integrated server is not available");
 		}
 
-		int port = NetworkUtils.findLocalPort();
 		GameMode gameMode = client.interactionManager != null
 			? client.interactionManager.getCurrentGameMode()
 			: GameMode.SURVIVAL;
-		boolean opened = client.getServer().openToLan(gameMode, false, port);
-		if (!opened) {
-			throw new LanHostingException("lan_open_failed", "Integrated server failed to open LAN");
+		int port;
+		try {
+			port = LanPortScan.openFirstAvailable(candidate -> client.getServer().openToLan(gameMode, false, candidate));
+		}
+		catch (LanPortScan.LanPortUnavailableException exception) {
+			throw new LanHostingException("lan_open_failed", exception.getMessage());
 		}
 
 		Map<String, Object> payload = new LinkedHashMap<>();
