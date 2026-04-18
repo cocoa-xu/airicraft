@@ -9,7 +9,6 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
-import java.io.IOException;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
@@ -19,6 +18,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
+import java.util.concurrent.CompletionException;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
@@ -102,34 +102,46 @@ final class WeaveCallsCompleteClient {
 			.POST(HttpRequest.BodyPublishers.ofString(requestBody, StandardCharsets.UTF_8))
 			.build();
 		try {
-			HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-			boolean success = response.statusCode() >= 200 && response.statusCode() < 300;
-			if (success) {
-				if (debugLogExports) {
-					Airicraft.LOGGER.info(
-						"Weave capture sidecar export succeeded endpoint={} threadId={} status={}",
-						completeEndpoint,
-						threadId,
-						response.statusCode()
-					);
-				}
-				return true;
-			}
-			Airicraft.LOGGER.warn(
-				"Weave capture sidecar export failed endpoint={} status={} body={}",
-				completeEndpoint,
-				response.statusCode(),
-				TraceSanitizer.summarizeForLog(response.body())
-			);
+			httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8))
+				.whenComplete((response, throwable) -> logCompletion(threadId, response, throwable));
+			return true;
+		}
+		catch (RuntimeException exception) {
+			Airicraft.LOGGER.warn("Weave capture sidecar export dispatch failed", exception);
 			return false;
 		}
-		catch (IOException | InterruptedException exception) {
-			if (exception instanceof InterruptedException) {
-				Thread.currentThread().interrupt();
-			}
-			Airicraft.LOGGER.warn("Weave capture sidecar export failed", exception);
-			return false;
+	}
+
+	private void logCompletion(String threadId, HttpResponse<String> response, Throwable throwable) {
+		if (throwable != null) {
+			Airicraft.LOGGER.warn("Weave capture sidecar export failed", unwrapCompletion(throwable));
+			return;
 		}
+		boolean success = response.statusCode() >= 200 && response.statusCode() < 300;
+		if (success) {
+			if (debugLogExports) {
+				Airicraft.LOGGER.info(
+					"Weave capture sidecar export succeeded endpoint={} threadId={} status={}",
+					completeEndpoint,
+					threadId,
+					response.statusCode()
+				);
+			}
+			return;
+		}
+		Airicraft.LOGGER.warn(
+			"Weave capture sidecar export failed endpoint={} status={} body={}",
+			completeEndpoint,
+			response.statusCode(),
+			TraceSanitizer.summarizeForLog(response.body())
+		);
+	}
+
+	private static Throwable unwrapCompletion(Throwable throwable) {
+		if (throwable instanceof CompletionException && throwable.getCause() != null) {
+			return throwable.getCause();
+		}
+		return throwable;
 	}
 
 	private String capturePayload(String threadId, FirstPersonScreenshotService.CapturedScreenshot capture, String imageDataUrl) {

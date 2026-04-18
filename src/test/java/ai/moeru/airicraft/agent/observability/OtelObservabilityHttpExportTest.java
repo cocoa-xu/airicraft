@@ -10,6 +10,7 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
@@ -21,6 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 
 class OtelObservabilityHttpExportTest {
 	@Test
@@ -174,6 +176,67 @@ class OtelObservabilityHttpExportTest {
 			assertEquals(0, otlpRequestCount.get(), "expected capture span to bypass legacy OTLP export");
 		}
 		finally {
+			server.stop(0);
+		}
+	}
+
+	@Test
+	void weaveCaptureSidecarDoesNotWaitForCallsCompleteResponse() throws Exception {
+		HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+		CountDownLatch completeRequestStarted = new CountDownLatch(1);
+		CountDownLatch releaseResponse = new CountDownLatch(1);
+		server.createContext("/v2/shinohara-rin/airicraft/calls/complete", exchange -> {
+			completeRequestStarted.countDown();
+			try {
+				assertTrue(releaseResponse.await(5, TimeUnit.SECONDS), "test did not release calls/complete response");
+			}
+			catch (InterruptedException exception) {
+				Thread.currentThread().interrupt();
+				throw new IOException(exception);
+			}
+			byte[] response = "{}".getBytes(StandardCharsets.UTF_8);
+			exchange.sendResponseHeaders(200, response.length);
+			try (OutputStream outputStream = exchange.getResponseBody()) {
+				outputStream.write(response);
+			}
+		});
+		server.start();
+		try {
+			int port = server.getAddress().getPort();
+			AgentConfig.ObservabilityConfig config = new AgentConfig.ObservabilityConfig(
+				true,
+				"otlp_http",
+				"http://127.0.0.1:" + port + "/otel/v1/traces",
+				Map.of("wandb-api-key", "test-key"),
+				Map.of(
+					"wandb.entity", "shinohara-rin",
+					"wandb.project", "airicraft"
+				),
+				"weave",
+				false,
+				false,
+				false,
+				true
+			);
+			WeaveCallsCompleteClient client = WeaveCallsCompleteClient.create(config);
+			assertNotNull(client);
+
+			assertTimeoutPreemptively(Duration.ofMillis(250), () -> assertTrue(client.exportImageCapture(
+				"session:test:speaker=rin",
+				new FirstPersonScreenshotService.CapturedScreenshot(
+					"png",
+					854,
+					480,
+					1920,
+					1080,
+					1234L,
+					new byte[]{1, 2, 3}
+				)
+			)));
+			assertTrue(completeRequestStarted.await(5, TimeUnit.SECONDS), "expected async calls/complete request");
+		}
+		finally {
+			releaseResponse.countDown();
 			server.stop(0);
 		}
 	}
