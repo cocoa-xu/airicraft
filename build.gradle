@@ -23,10 +23,6 @@ base {
 	archivesName = project.archives_base_name
 }
 
-repositories {
-	// Repositories are configured in settings.gradle.
-}
-
 loom {
 	splitEnvironmentSourceSets()
 
