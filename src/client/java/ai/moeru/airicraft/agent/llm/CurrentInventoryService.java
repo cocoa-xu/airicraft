@@ -2,12 +2,20 @@ package ai.moeru.airicraft.agent.llm;
 
 import ai.moeru.airicraft.agent.tasks.CraftingOpportunity;
 import ai.moeru.airicraft.agent.tasks.CraftingOpportunityResolver;
+import ai.moeru.airicraft.agent.tasks.CraftingGridKind;
 import ai.moeru.airicraft.agent.tasks.InventoryItemCounter;
 import ai.moeru.airicraft.agent.tasks.InventoryResourceCounter;
 import ai.moeru.airicraft.agent.tasks.TaskResourceKind;
+import net.minecraft.block.BlockState;
+import net.minecraft.block.Blocks;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.network.ClientPlayerEntity;
 import net.minecraft.item.ItemStack;
 import net.minecraft.registry.Registries;
+import net.minecraft.screen.CraftingScreenHandler;
+import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Direction;
+import net.minecraft.util.math.Vec3d;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -22,6 +30,10 @@ import java.util.stream.Collectors;
 
 public final class CurrentInventoryService implements CurrentInventoryTool {
 	private static final int MAX_RECIPE_RESULTS = 24;
+	private static final int TABLE_SEARCH_RADIUS = 10;
+	private static final int TABLE_SEARCH_VERTICAL_RADIUS = 4;
+	private static final double TABLE_INTERACTION_RANGE_SQUARED = 20.25D;
+	private static final String CRAFTING_TABLE_ITEM_ID = "minecraft:crafting_table";
 
 	private final Supplier<MinecraftClient> clientSupplier;
 	private final InventoryResourceCounter resourceCounter = new InventoryResourceCounter();
@@ -65,31 +77,143 @@ public final class CurrentInventoryService implements CurrentInventoryTool {
 	}
 
 	@Override
-	public CompletableFuture<String> inspectRecipes(String prompt) {
+	public CompletableFuture<String> checkCraftables(String prompt) {
 		MinecraftClient client = clientSupplier.get();
 		if (client == null || client.world == null || client.player == null) {
-			return CompletableFuture.completedFuture("RECIPES_UNAVAILABLE: world_not_loaded");
+			return CompletableFuture.completedFuture("CRAFTABLES_UNAVAILABLE: world_not_loaded");
 		}
 
 		List<CraftingOpportunity> opportunities = CraftingOpportunityResolver.availableCrafts(client.player);
-		String recipes = opportunities.isEmpty()
-			? "none"
-			: opportunities.stream()
-				.limit(MAX_RECIPE_RESULTS)
-				.map(CraftingOpportunity::compactDescription)
-				.collect(Collectors.joining("; ", "Available 2x2 crafts: ", ""));
-		String exactItemIds = opportunities.isEmpty()
+		Map<String, Integer> itemCounts = itemCounter.count(client.player.getInventory());
+		CraftingTableAccess tableAccess = craftingTableAccess(client, itemCounts);
+		List<CraftingOpportunity> craftableNow = opportunities.stream()
+			.filter(opportunity -> opportunity.gridKind() == CraftingGridKind.PLAYER_2X2 || tableAccess == CraftingTableAccess.OPEN)
+			.limit(MAX_RECIPE_RESULTS)
+			.toList();
+		List<CraftingOpportunity> craftableWithSetup = opportunities.stream()
+			.filter(opportunity -> opportunity.gridKind() == CraftingGridKind.WORKBENCH_3X3 && tableAccess != CraftingTableAccess.OPEN && tableAccess != CraftingTableAccess.MISSING)
+			.limit(MAX_RECIPE_RESULTS)
+			.toList();
+		List<CraftingOpportunity> blockedByTable = opportunities.stream()
+			.filter(opportunity -> opportunity.gridKind() == CraftingGridKind.WORKBENCH_3X3 && tableAccess == CraftingTableAccess.MISSING)
+			.limit(MAX_RECIPE_RESULTS)
+			.toList();
+		List<CraftingOpportunity> executable = new ArrayList<>();
+		executable.addAll(craftableNow);
+		executable.addAll(craftableWithSetup);
+		String exactItemIds = executable.isEmpty()
 			? "[]"
-			: opportunities.stream()
-				.limit(MAX_RECIPE_RESULTS)
+			: executable.stream()
 				.map(CraftingOpportunity::recipeId)
 				.collect(Collectors.joining(", ", "[", "]"));
 		return CompletableFuture.completedFuture(
-			"Tool result for inspect_recipes: "
-				+ "availableCrafts=" + recipes
+			"Tool result for check_craftables: "
+				+ "craftableNow=" + formatCrafts(craftableNow)
+				+ ", craftableWithSetup=" + formatCrafts(craftableWithSetup)
+				+ ", blocked=" + formatCrafts(blockedByTable)
 				+ ", exactRecipeIds=" + exactItemIds
-				+ ", note=Use exactRecipeIds for CRAFT_RECIPE.recipeId. times means recipe runs, not output item count. Only 2x2 player-inventory recipes are supported; 3x3 workbench-grid recipes are not supported yet. The item crafting_table is supported when listed."
+				+ ", craftingTableAccess=" + tableAccess.name().toLowerCase(java.util.Locale.ROOT)
+				+ ", note=Use exactRecipeIds for CRAFT_RECIPE.recipeId. times means recipe runs, not output item count. 3x3 workbench recipes can automatically navigate to a nearby crafting table within 10 blocks, place one from inventory, or craft one from planks."
 		);
+	}
+
+	private static String formatCrafts(List<CraftingOpportunity> opportunities) {
+		if (opportunities == null || opportunities.isEmpty()) {
+			return "none";
+		}
+		return opportunities.stream()
+			.map(CraftingOpportunity::compactDescription)
+			.collect(Collectors.joining("; ", "[", "]"));
+	}
+
+	private static CraftingTableAccess craftingTableAccess(MinecraftClient client, Map<String, Integer> itemCounts) {
+		return craftingTableAccess(
+			client.player.currentScreenHandler instanceof CraftingScreenHandler,
+			hasUsableNearbyCraftingTable(client, client.player),
+			itemCounts
+		);
+	}
+
+	static CraftingTableAccess craftingTableAccess(boolean workbenchOpen, boolean usableNearbyTable, Map<String, Integer> itemCounts) {
+		Map<String, Integer> safeItemCounts = itemCounts == null ? Map.of() : itemCounts;
+		if (workbenchOpen) {
+			return CraftingTableAccess.OPEN;
+		}
+		if (usableNearbyTable) {
+			return CraftingTableAccess.NEARBY;
+		}
+		if (safeItemCounts.getOrDefault(CRAFTING_TABLE_ITEM_ID, 0) > 0) {
+			return CraftingTableAccess.IN_INVENTORY;
+		}
+		if (plankCount(safeItemCounts) >= 4) {
+			return CraftingTableAccess.CAN_CRAFT;
+		}
+		return CraftingTableAccess.MISSING;
+	}
+
+	private static boolean hasUsableNearbyCraftingTable(MinecraftClient client, ClientPlayerEntity player) {
+		if (client.world == null || player == null) {
+			return false;
+		}
+		BlockPos origin = player.getBlockPos();
+		for (int dx = -TABLE_SEARCH_RADIUS; dx <= TABLE_SEARCH_RADIUS; dx++) {
+			for (int dy = -TABLE_SEARCH_VERTICAL_RADIUS; dy <= TABLE_SEARCH_VERTICAL_RADIUS; dy++) {
+				for (int dz = -TABLE_SEARCH_RADIUS; dz <= TABLE_SEARCH_RADIUS; dz++) {
+					BlockPos pos = origin.add(dx, dy, dz);
+					if (origin.getSquaredDistance(pos) > TABLE_SEARCH_RADIUS * TABLE_SEARCH_RADIUS || !client.world.isChunkLoaded(pos)) {
+						continue;
+					}
+					if (client.world.getBlockState(pos).isOf(Blocks.CRAFTING_TABLE)
+						&& (withinInteractionRange(player, pos) || hasStandableAdjacentPosition(client, pos))) {
+						return true;
+					}
+				}
+			}
+		}
+		return false;
+	}
+
+	private static boolean hasStandableAdjacentPosition(MinecraftClient client, BlockPos tablePos) {
+		for (Direction direction : Direction.Type.HORIZONTAL) {
+			if (isStandable(client, tablePos.offset(direction))) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean isStandable(MinecraftClient client, BlockPos pos) {
+		if (client.world == null || !client.world.isChunkLoaded(pos) || !client.world.isChunkLoaded(pos.up())) {
+			return false;
+		}
+		BlockState feet = client.world.getBlockState(pos);
+		BlockState head = client.world.getBlockState(pos.up());
+		BlockState floor = client.world.getBlockState(pos.down());
+		return (feet.isAir() || feet.isReplaceable())
+			&& (head.isAir() || head.isReplaceable())
+			&& floor.isSideSolidFullSquare(client.world, pos.down(), Direction.UP);
+	}
+
+	private static boolean withinInteractionRange(ClientPlayerEntity player, BlockPos pos) {
+		return player.squaredDistanceTo(Vec3d.ofCenter(pos)) <= TABLE_INTERACTION_RANGE_SQUARED;
+	}
+
+	private static int plankCount(Map<String, Integer> itemCounts) {
+		int count = 0;
+		for (Map.Entry<String, Integer> entry : itemCounts.entrySet()) {
+			if (entry.getKey().endsWith("_planks")) {
+				count += entry.getValue();
+			}
+		}
+		return count;
+	}
+
+	enum CraftingTableAccess {
+		OPEN,
+		NEARBY,
+		IN_INVENTORY,
+		CAN_CRAFT,
+		MISSING
 	}
 
 	private static Map<String, Integer> sortedItemCounts(Map<String, Integer> counts) {

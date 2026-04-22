@@ -76,7 +76,7 @@ public final class ReiRecipeSearchToolProvider implements PlannerToolProvider {
 			If REI recipe-viewer knowledge is needed, call search_recipes.
 			search_recipes.query accepts item ids or item names.
 			search_recipes.mode="output" finds recipes that make an item; mode="input" finds uses; mode="all" searches both.
-			search_recipes is read-only recipe knowledge. Do not pass its recipe ids to craft_recipe unless inspect_recipes also lists them as currently craftable.
+			search_recipes is read-only recipe knowledge. Do not pass its recipe ids to craft_recipe unless check_craftables also lists them as currently craftable.
 			""";
 	}
 
@@ -105,13 +105,15 @@ public final class ReiRecipeSearchToolProvider implements PlannerToolProvider {
 			if (!maxResultsElem.isJsonPrimitive()) {
 				throw new JsonParseException("maxResults must be an integer");
 			}
+			int maxResults;
 			try {
-				int maxResults = maxResultsElem.getAsInt();
-				if (maxResults <= 0 || maxResults > 48) {
-					throw new JsonParseException("maxResults must be between 1 and 48");
-				}
-			} catch (RuntimeException e) {
+				maxResults = maxResultsElem.getAsInt();
+			}
+			catch (RuntimeException e) {
 				throw new JsonParseException("maxResults must be an integer", e);
+			}
+			if (maxResults <= 0 || maxResults > 48) {
+				throw new JsonParseException("maxResults must be between 1 and 48");
 			}
 		}
 	}
