@@ -51,6 +51,34 @@ class PlannerPromptPolicyTest {
 	}
 
 	@Test
+	void systemPromptExplainsEntityInteractionToolSelectors() {
+		String prompt = PlannerPromptPolicy.systemPrompt(PlannerVisionMode.EXTERNAL_SUMMARY);
+
+		assertTrue(prompt.contains("attack_entity"));
+		assertTrue(prompt.contains("use_entity"));
+		assertTrue(prompt.contains("uuid"));
+		assertTrue(prompt.contains("name"));
+		assertTrue(prompt.contains("entityTypeId"));
+		assertTrue(prompt.contains("minecraft:shears"));
+		assertTrue(prompt.contains("accepted action tool"));
+		assertTrue(prompt.contains("TASK UPDATE"));
+		assertTrue(prompt.contains("choose exactly one nearby alive target"));
+		assertTrue(prompt.contains("prefer the nearest one"));
+		assertTrue(prompt.contains("Always copy the uuid token exactly as shown"));
+	}
+
+	@Test
+	void systemPromptExplainsNearbyEntityInspectionTool() {
+		String prompt = PlannerPromptPolicy.systemPrompt(PlannerVisionMode.EXTERNAL_SUMMARY);
+
+		assertTrue(prompt.contains("inspect_nearby_entities"));
+		assertTrue(prompt.contains("nearby entities"));
+		assertTrue(prompt.contains("uuid"));
+		assertTrue(prompt.contains("entityTypeId"));
+		assertTrue(prompt.contains("distance"));
+	}
+
+	@Test
 	void systemPromptDistinguishesStartupInventoryFromLatestToolFollowUp() {
 		String prompt = PlannerPromptPolicy.systemPrompt(PlannerVisionMode.EXTERNAL_SUMMARY);
 

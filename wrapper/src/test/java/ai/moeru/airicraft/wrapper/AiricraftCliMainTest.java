@@ -260,6 +260,53 @@ class AiricraftCliMainTest {
 	}
 
 	@Test
+	void playerAttackEntityPassesSelectorPayload() {
+		TestTransport transport = new TestTransport();
+		transport.playerAttackEntityPayload = linkedMap("accepted", true, "task", linkedMap("state", "QUEUED"));
+
+		CliResult result = execute(transport, "player", "attack-entity", "--entity-type-id", "minecraft:sheep", "--mode", "hit_once");
+
+		assertEquals(0, result.exitCode());
+		assertTrue(result.output().contains("command: player attack-entity\n"));
+		assertEquals("minecraft:sheep", transport.lastAttackEntityTypeId);
+		assertEquals("hit_once", transport.lastAttackEntityMode);
+	}
+
+	@Test
+	void playerNearbyEntitiesCallsTransport() {
+		TestTransport transport = new TestTransport();
+		transport.playerNearbyEntitiesPayload = linkedMap(
+			"entityCount", 1,
+			"entities", List.of(linkedMap("entityTypeId", "minecraft:sheep", "name", "Sheep", "distance", 3.0))
+		);
+
+		CliResult result = execute(transport, "player", "nearby-entities");
+
+		assertEquals(0, result.exitCode());
+		assertTrue(result.output().contains("command: player nearby-entities\n"));
+		assertTrue(result.output().contains("entityCount: 1\n"));
+		assertTrue(transport.playerNearbyEntitiesCalled);
+	}
+
+	@Test
+	void playerUseEntityPassesSelectorAndItemPayload() {
+		TestTransport transport = new TestTransport();
+		transport.playerUseEntityPayload = linkedMap("accepted", true, "task", linkedMap("state", "QUEUED"));
+
+		CliResult result = execute(
+			transport,
+			"player", "use-entity",
+			"--name", "Dinner",
+			"--item-id", "minecraft:shears"
+		);
+
+		assertEquals(0, result.exitCode());
+		assertTrue(result.output().contains("command: player use-entity\n"));
+		assertEquals("Dinner", transport.lastUseEntityName);
+		assertEquals("minecraft:shears", transport.lastUseEntityItemId);
+	}
+
+	@Test
 	void agentEventPolicyClearCallsTransport() {
 		TestTransport transport = new TestTransport();
 		transport.agentEventPolicyPayload = linkedMap(
@@ -820,6 +867,7 @@ class AiricraftCliMainTest {
 		private Map<String, Object> serversPayload = Map.of("servers", List.of());
 		private Map<String, Object> focusPayload = Map.of();
 		private Map<String, Object> snapshotPayload = Map.of();
+		private Map<String, Object> playerNearbyEntitiesPayload = Map.of("entities", List.of());
 		private Map<String, Object> agentStatusPayload = Map.of();
 		private Map<String, Object> agentSessionPayload = Map.of();
 		private Map<String, Object> agentSessionOpenLanPayload = Map.of();
@@ -851,6 +899,8 @@ class AiricraftCliMainTest {
 		private Map<String, Object> worldsJoinPayload = Map.of("started", true);
 		private Map<String, Object> serversJoinPayload = Map.of("started", true);
 		private Map<String, Object> lookAtPayload = Map.of("started", true);
+		private Map<String, Object> playerAttackEntityPayload = Map.of("accepted", true);
+		private Map<String, Object> playerUseEntityPayload = Map.of("accepted", true);
 		private CapturedImage capturedImage = new CapturedImage(new byte[0], "png", 854, 480, 854, 480, 1L);
 		private VisionDescriptionResult visionDescriptionResult = new VisionDescriptionResult("text", 1L, "gpt-4.1-mini", "desc");
 		private String lastVisionPrompt;
@@ -873,6 +923,15 @@ class AiricraftCliMainTest {
 		private Map<String, Object> lastSubmittedMission;
 		private String lastDebugChatMessage;
 		private Long lastDebugTimelineSince;
+		private String lastAttackEntityUuid;
+		private String lastAttackEntityName;
+		private String lastAttackEntityTypeId;
+		private String lastAttackEntityMode;
+		private String lastUseEntityUuid;
+		private String lastUseEntityName;
+		private String lastUseEntityTypeId;
+		private String lastUseEntityItemId;
+		private boolean playerNearbyEntitiesCalled;
 
 		private RuntimeException worldsJoinFailure;
 		private RuntimeException serversListFailure;
@@ -897,6 +956,12 @@ class AiricraftCliMainTest {
 		@Override
 		public Map<String, Object> getWorldSnapshot(Integer x, Integer y, Integer z, int radius) {
 			return snapshotPayload;
+		}
+
+		@Override
+		public Map<String, Object> listNearbyEntities() {
+			playerNearbyEntitiesCalled = true;
+			return playerNearbyEntitiesPayload;
 		}
 
 		@Override
@@ -942,6 +1007,24 @@ class AiricraftCliMainTest {
 		@Override
 		public Map<String, Object> lookAt(double x, double y, double z) {
 			return lookAtPayload;
+		}
+
+		@Override
+		public Map<String, Object> attackEntity(String uuid, String name, String entityTypeId, String mode) {
+			lastAttackEntityUuid = uuid;
+			lastAttackEntityName = name;
+			lastAttackEntityTypeId = entityTypeId;
+			lastAttackEntityMode = mode;
+			return playerAttackEntityPayload;
+		}
+
+		@Override
+		public Map<String, Object> useEntity(String uuid, String name, String entityTypeId, String itemId) {
+			lastUseEntityUuid = uuid;
+			lastUseEntityName = name;
+			lastUseEntityTypeId = entityTypeId;
+			lastUseEntityItemId = itemId;
+			return playerUseEntityPayload;
 		}
 
 		@Override

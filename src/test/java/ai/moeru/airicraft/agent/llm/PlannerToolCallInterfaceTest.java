@@ -2,6 +2,7 @@ package ai.moeru.airicraft.agent.llm;
 
 import ai.moeru.airicraft.agent.AgentConfig;
 import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.sun.net.httpserver.HttpExchange;
@@ -154,6 +155,50 @@ class PlannerToolCallInterfaceTest {
 	}
 
 	@Test
+	void exposesAndParsesEntityInteractionTools() {
+		JsonArray tools = JsonParser.parseString(gson().toJson(PlannerToolCatalog.openAiTools())).getAsJsonArray();
+
+		assertTrue(toolNames(tools).contains("attack_entity"));
+		assertTrue(toolNames(tools).contains("use_entity"));
+		PlannerToolCall attackCall = PlannerToolCatalog.parseToolCall(toolCall("attack_entity", """
+			{"entityTypeId":"minecraft:sheep","mode":"hit_once"}
+			"""));
+		PlannerToolCall useCall = PlannerToolCatalog.parseToolCall(toolCall("use_entity", """
+			{"name":"Dinner","itemId":"minecraft:shears"}
+			"""));
+
+		assertEquals("attack_entity", attackCall.name());
+		assertEquals("minecraft:sheep", attackCall.arguments().get("entityTypeId").getAsString());
+		assertEquals("hit_once", attackCall.arguments().get("mode").getAsString());
+		assertEquals("use_entity", useCall.name());
+		assertEquals("Dinner", useCall.arguments().get("name").getAsString());
+		assertEquals("minecraft:shears", useCall.arguments().get("itemId").getAsString());
+	}
+
+	@Test
+	void entityInteractionToolSchemasRequireUuid() {
+		JsonArray tools = JsonParser.parseString(gson().toJson(PlannerToolCatalog.openAiTools())).getAsJsonArray();
+		JsonObject attackParameters = toolSchema(tools, "attack_entity");
+		JsonObject useParameters = toolSchema(tools, "use_entity");
+
+		assertRequiredUuid(attackParameters);
+		assertRequiredUuid(useParameters);
+	}
+
+	@Test
+	void exposesAndParsesNearbyEntityInspectionTool() {
+		JsonArray tools = JsonParser.parseString(gson().toJson(PlannerToolCatalog.openAiTools())).getAsJsonArray();
+
+		assertTrue(toolNames(tools).contains("inspect_nearby_entities"));
+		PlannerToolCall inspectCall = PlannerToolCatalog.parseToolCall(toolCall("inspect_nearby_entities", """
+			{"prompt":"List nearby mobs I can interact with."}
+			"""));
+
+		assertEquals("inspect_nearby_entities", inspectCall.name());
+		assertEquals("List nearby mobs I can interact with.", inspectCall.arguments().get("prompt").getAsString());
+	}
+
+	@Test
 	void exposesCheckCraftablesInsteadOfInspectRecipes() {
 		JsonArray tools = JsonParser.parseString(gson().toJson(PlannerToolCatalog.openAiTools())).getAsJsonArray();
 
@@ -222,6 +267,15 @@ class PlannerToolCallInterfaceTest {
 	}
 
 	@Test
+	void rejectsEntityInteractionWithoutSelector() {
+		assertThrows(com.google.gson.JsonParseException.class, () ->
+			PlannerToolCatalog.parseToolCall(toolCall("attack_entity", """
+				{}
+				"""))
+		);
+	}
+
+	@Test
 	void rejectsMultipleToolCallsInOneAssistantMessage() throws Exception {
 		AtomicReference<String> bodyRef = new AtomicReference<>();
 		try (TestServer server = TestServer.start(bodyRef, """
@@ -259,6 +313,23 @@ class PlannerToolCallInterfaceTest {
 		return tools.asList().stream()
 			.map(element -> element.getAsJsonObject().getAsJsonObject("function").get("name").getAsString())
 			.toList();
+	}
+
+	private static JsonObject toolSchema(JsonArray tools, String toolName) {
+		return tools.asList().stream()
+			.map(JsonElement::getAsJsonObject)
+			.map(tool -> tool.getAsJsonObject("function"))
+			.filter(function -> toolName.equals(function.get("name").getAsString()))
+			.map(function -> function.getAsJsonObject("parameters"))
+			.findFirst()
+			.orElseThrow();
+	}
+
+	private static void assertRequiredUuid(JsonObject parameters) {
+		JsonArray required = parameters.getAsJsonArray("required");
+		assertNotNull(required);
+		assertEquals(1, required.size());
+		assertEquals("uuid", required.get(0).getAsString());
 	}
 
 	private static JsonObject toolCall(String name, String arguments) {

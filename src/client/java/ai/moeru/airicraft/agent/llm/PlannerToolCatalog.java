@@ -1,5 +1,6 @@
 package ai.moeru.airicraft.agent.llm;
 
+import ai.moeru.airicraft.agent.tasks.EntityAttackMode;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -18,6 +19,7 @@ public final class PlannerToolCatalog {
 	public static final String TAKE_A_LOOK = "take_a_look";
 	public static final String INSPECT_INVENTORY = "inspect_inventory";
 	public static final String CHECK_CRAFTABLES = "check_craftables";
+	public static final String INSPECT_NEARBY_ENTITIES = "inspect_nearby_entities";
 	public static final String FOLLOW_PLAYER = "follow_player";
 	public static final String NAVIGATE_TO = "navigate_to";
 	public static final String MINE_BLOCKS = "mine_blocks";
@@ -25,6 +27,8 @@ public final class PlannerToolCatalog {
 	public static final String CRAFT_RECIPE = "craft_recipe";
 	public static final String DROP_ITEMS = "drop_items";
 	public static final String GIVE_PLAYER = "give_player";
+	public static final String ATTACK_ENTITY = "attack_entity";
+	public static final String USE_ENTITY = "use_entity";
 	public static final String CANCEL_TASK = "cancel_task";
 	public static final String CLEAR_GOAL = "clear_goal";
 	public static final String UPDATE_EVENT_POLICY = "update_event_policy";
@@ -45,6 +49,10 @@ public final class PlannerToolCatalog {
 			tool(CHECK_CRAFTABLES, "Check currently executable crafting options.", properties(
 				prop("narration", optionalString("Optional visible narration before using the tool. Omit this field when no narration is needed.")),
 				prop("prompt", string("Optional crafting question."))
+			), List.of()),
+			tool(INSPECT_NEARBY_ENTITIES, "List nearby loaded entities with exact selectors such as uuid, name, entityTypeId, distance, and health when available.", properties(
+				prop("narration", optionalString("Optional visible narration before using the tool. Omit this field when no narration is needed.")),
+				prop("prompt", string("Optional nearby-entity question."))
 			), List.of()),
 			tool(FOLLOW_PLAYER, "Follow a named player.", properties(
 				prop("narration", optionalString("Optional visible narration before using the tool. Omit this field when no narration is needed.")),
@@ -83,6 +91,20 @@ public final class PlannerToolCatalog {
 				prop("itemId", string("Exact namespaced item id from inspect_inventory itemCounts.")),
 				prop("quantity", integer("Number of items to drop."))
 			), List.of("targetPlayer", "itemId", "quantity")),
+			tool(ATTACK_ENTITY, "Attack one nearby entity. Default mode kill keeps attacking until the target dies; hit_once stops after one landed hit. Always copy the uuid token shown by inspect_nearby_entities or focus, and optionally include name or entityTypeId.", properties(
+				prop("narration", optionalString("Optional visible narration before using the tool. Omit this field when no narration is needed.")),
+				prop("uuid", optionalString("Entity uuid token copied from inspect_nearby_entities or focus. Full uuid also works.")),
+				prop("name", optionalString("Visible custom name or display name when available.")),
+				prop("entityTypeId", optionalString("Exact namespaced entity type id, for example minecraft:sheep.")),
+				prop("mode", enumString("Attack mode. Use kill unless the user asks for one hit.", List.of("kill", "hit_once")))
+			), List.of("uuid")),
+			tool(USE_ENTITY, "Use current hand or an optional item on one nearby entity. Always copy the uuid token shown by inspect_nearby_entities or focus, and optionally include name or entityTypeId.", properties(
+				prop("narration", optionalString("Optional visible narration before using the tool. Omit this field when no narration is needed.")),
+				prop("uuid", optionalString("Entity uuid token copied from inspect_nearby_entities or focus. Full uuid also works.")),
+				prop("name", optionalString("Visible custom name or display name when available.")),
+				prop("entityTypeId", optionalString("Exact namespaced entity type id, for example minecraft:sheep.")),
+				prop("itemId", optionalString("Optional exact namespaced item id to equip first, for example minecraft:shears."))
+			), List.of("uuid")),
 			tool(CANCEL_TASK, "Cancel the current task or job.", properties(
 				prop("narration", optionalString("Optional visible narration before using the tool. Omit this field when no narration is needed.")),
 				prop("reason", string("Optional cancellation reason."))
@@ -156,7 +178,7 @@ public final class PlannerToolCatalog {
 
 	public static boolean isReadTool(String name) {
 		return switch (normalizeName(name)) {
-			case TAKE_A_LOOK, INSPECT_INVENTORY, CHECK_CRAFTABLES -> true;
+			case TAKE_A_LOOK, INSPECT_INVENTORY, CHECK_CRAFTABLES, INSPECT_NEARBY_ENTITIES -> true;
 			default -> false;
 		};
 	}
@@ -166,6 +188,7 @@ public final class PlannerToolCatalog {
 			case TAKE_A_LOOK,
 				INSPECT_INVENTORY,
 				CHECK_CRAFTABLES,
+				INSPECT_NEARBY_ENTITIES,
 				FOLLOW_PLAYER,
 				NAVIGATE_TO,
 				MINE_BLOCKS,
@@ -173,6 +196,8 @@ public final class PlannerToolCatalog {
 				CRAFT_RECIPE,
 				DROP_ITEMS,
 				GIVE_PLAYER,
+				ATTACK_ENTITY,
+				USE_ENTITY,
 				CANCEL_TASK,
 				CLEAR_GOAL,
 				UPDATE_EVENT_POLICY -> true;
@@ -243,7 +268,7 @@ public final class PlannerToolCatalog {
 
 	private static void validateArguments(String name, JsonObject arguments) {
 		switch (normalizeName(name)) {
-			case TAKE_A_LOOK, INSPECT_INVENTORY, CHECK_CRAFTABLES, CLEAR_GOAL -> {
+			case TAKE_A_LOOK, INSPECT_INVENTORY, CHECK_CRAFTABLES, INSPECT_NEARBY_ENTITIES, CLEAR_GOAL -> {
 			}
 			case FOLLOW_PLAYER -> requireString(arguments, "targetPlayer");
 			case NAVIGATE_TO -> {
@@ -276,10 +301,41 @@ public final class PlannerToolCatalog {
 				requireString(arguments, "itemId");
 				requirePositiveInt(arguments, "quantity");
 			}
+			case ATTACK_ENTITY -> {
+				requireEntitySelector(arguments);
+				if (arguments.has("mode") && !arguments.get("mode").isJsonNull()) {
+					requireAttackMode(arguments);
+				}
+			}
+			case USE_ENTITY -> {
+				requireEntitySelector(arguments);
+				if (arguments.has("itemId") && !arguments.get("itemId").isJsonNull()) {
+					requireString(arguments, "itemId");
+				}
+			}
 			case CANCEL_TASK -> {
 			}
 			case UPDATE_EVENT_POLICY -> validatePolicyArguments(arguments);
 			default -> throw new JsonParseException("Unknown planner tool: " + name);
+		}
+	}
+
+	private static void requireEntitySelector(JsonObject arguments) {
+		boolean hasUuid = getString(arguments, "uuid").isPresent();
+		boolean hasName = getString(arguments, "name").isPresent();
+		boolean hasEntityTypeId = getString(arguments, "entityTypeId").isPresent();
+		if (!hasUuid && !hasName && !hasEntityTypeId) {
+			throw new JsonParseException("entity selector requires uuid, name, or entityTypeId");
+		}
+	}
+
+	private static void requireAttackMode(JsonObject arguments) {
+		String mode = requireString(arguments, "mode");
+		try {
+			EntityAttackMode.fromWireValue(mode);
+		}
+		catch (IllegalArgumentException exception) {
+			throw new JsonParseException(exception.getMessage(), exception);
 		}
 	}
 
