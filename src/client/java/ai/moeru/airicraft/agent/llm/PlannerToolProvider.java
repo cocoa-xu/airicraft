@@ -25,4 +25,8 @@ public interface PlannerToolProvider {
 	}
 
 	CompletableFuture<String> execute(PlannerToolCall toolCall);
+
+	default CompletableFuture<PlannerProviderToolResult> executeResult(PlannerToolCall toolCall) {
+		return execute(toolCall).thenApply(PlannerProviderToolResult::text);
+	}
 }

@@ -11,6 +11,21 @@ public interface CurrentViewVisionTool {
 
 	CompletableFuture<VisionDescription> requestDescription(FirstPersonScreenshotService.CapturedScreenshot screenshot, String prompt);
 
+	default CompletableFuture<VisionDescription> requestDescription(LlmImageAttachment imageAttachment, String prompt) {
+		String format = imageAttachment.mimeType().startsWith("image/")
+			? imageAttachment.mimeType().substring("image/".length())
+			: imageAttachment.mimeType();
+		return requestDescription(new FirstPersonScreenshotService.CapturedScreenshot(
+			format,
+			0,
+			0,
+			0,
+			0,
+			System.currentTimeMillis(),
+			imageAttachment.imageBytes()
+		), prompt);
+	}
+
 	default CompletableFuture<VisionDescription> requestDescription(String prompt) {
 		return requestCapture().thenCompose(screenshot -> requestDescription(screenshot, prompt));
 	}

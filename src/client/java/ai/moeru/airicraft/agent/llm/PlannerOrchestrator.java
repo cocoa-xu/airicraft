@@ -1116,13 +1116,50 @@ public final class PlannerOrchestrator {
 			case NEARBY_ENTITIES_TOOL_NAME -> inventoryTool.inspectNearbyEntities(toolPrompt(toolCall)).thenApply(TextToolExecutionOutcome::new);
 			default -> {
 				CompletableFuture<ToolExecutionOutcome> providerToolFuture = toolRegistry.providerFor(toolCall.name())
-					.map(provider -> provider.execute(toolCall).<ToolExecutionOutcome>thenApply(TextToolExecutionOutcome::new))
+					.map(provider -> provider.executeResult(toolCall).thenCompose(result -> providerToolOutcome(toolCall, result)))
 					.orElse(null);
 				yield providerToolFuture == null
 					? actionToolExecutor.execute(toolCall).<ToolExecutionOutcome>thenApply(TextToolExecutionOutcome::new)
 					: providerToolFuture;
 			}
 		};
+	}
+
+	private CompletableFuture<ToolExecutionOutcome> providerToolOutcome(PlannerToolCall toolCall, PlannerProviderToolResult result) {
+		if (result.imageAttachment() == null) {
+			return CompletableFuture.completedFuture(new TextToolExecutionOutcome(result.text()));
+		}
+		if (visionMode == PlannerVisionMode.NATIVE_TOOL_IMAGE) {
+			return CompletableFuture.completedFuture(new ImageToolExecutionOutcome(result.text(), result.imageAttachment()));
+		}
+		if (!visionTool.isConfigured()) {
+			return CompletableFuture.completedFuture(new TextToolExecutionOutcome(
+				result.text() + "\nVISION_UNAVAILABLE: vision_provider_unavailable"
+			));
+		}
+
+		return visionTool.requestDescription(result.imageAttachment(), providerImagePrompt(toolCall, result.text()))
+			.<ToolExecutionOutcome>handle((description, throwable) -> {
+				if (throwable == null) {
+					return new TextToolExecutionOutcome(result.text() + "\nVision summary: " + description.text());
+				}
+				String code = visionFailureCode(throwable);
+				Airicraft.LOGGER.warn("Provider image tool vision summary failed tool={} code={}", toolCall.name(), code, throwable);
+				return new TextToolExecutionOutcome(result.text() + "\nVISION_UNAVAILABLE: " + code);
+			});
+	}
+
+	private static String providerImagePrompt(PlannerToolCall toolCall, String toolResultText) {
+		String normalizedName = normalizedToolName(toolCall);
+		if ("take_map_look".equals(normalizedName)) {
+			return "Describe this Minecraft map image for a planner that cannot see images. "
+				+ "Mention the player marker or center point if visible, whether the minimap or worldmap appears off-center, "
+				+ "nearby terrain, water, structures, waypoints, and useful directions. "
+				+ "Tool metadata: " + (toolResultText == null || toolResultText.isBlank() ? "none" : toolResultText);
+		}
+		return "Describe this tool image for a planner that cannot see images. "
+			+ "Call out visible state, labels, markers, spatial relationships, and anything actionable. "
+			+ "Tool metadata: " + (toolResultText == null || toolResultText.isBlank() ? "none" : toolResultText);
 	}
 
 	private CompletableFuture<ToolExecutionOutcome> requestVisionTool(PlannerToolCall toolCall) {

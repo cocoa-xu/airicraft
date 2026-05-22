@@ -352,6 +352,47 @@ class PlannerOrchestratorTest {
 	}
 
 	@Test
+	void providerImageToolUsesExternalVisionSummaryWhenPlannerDoesNotAcceptNativeImages() {
+		RecordingBackend backend = new RecordingBackend();
+		JsonObject args = new JsonObject();
+		args.addProperty("kind", "minimap");
+		PlannerToolCall toolCall = new PlannerToolCall("call_map", "take_map_look", args, null, null);
+		ImagePlannerToolProvider provider = new ImagePlannerToolProvider();
+		StubVisionTool visionTool = new StubVisionTool(
+			true,
+			CompletableFuture.failedFuture(new AssertionError("Provider image tools should not capture first-person view")),
+			CompletableFuture.completedFuture(new VisionDescription(
+				"Player marker is centered near a lake, with forest to the north.",
+				"gpt-4.1-mini",
+				1L
+			))
+		);
+		PlannerOrchestrator orchestrator = newOrchestrator(
+			backend,
+			visionTool,
+			CurrentInventoryTool.disabled(),
+			PlannerVisionMode.EXTERNAL_SUMMARY,
+			PlannerToolRegistry.of(provider)
+		);
+
+		orchestrator.submit(baseRequest(null));
+		backend.awaitCalls(1, Duration.ofSeconds(1));
+		backend.succeed(0, new PlannerResponse("", toolCall, null));
+		awaitBackendCallCount(orchestrator, backend, 2, Duration.ofSeconds(1));
+
+		LlmConversation followUp = backend.conversation(1);
+		assertFalse(followUp.messages().stream().anyMatch(LlmChatMessage::hasImageAttachment));
+		assertTrue(terminalPrompt(followUp).contains("Player marker is centered near a lake"));
+		assertEquals(0, visionTool.captureRequestCount());
+		assertEquals(1, visionTool.descriptionRequestCount());
+
+		backend.succeed(1, replyOnly("The player marker is near the lake."));
+		PlannerExecutionResult result = awaitResult(orchestrator);
+		assertTrue(result.succeeded());
+		assertTrue(result.request().toolResult().contains("Player marker is centered near a lake"));
+	}
+
+	@Test
 	void actionToolCallsRouteThroughExecutorWithNarration() {
 		JsonObject followArgs = new JsonObject();
 		followArgs.addProperty("targetPlayer", "Alice");
@@ -1924,6 +1965,43 @@ class PlannerOrchestratorTest {
 
 		private List<String> queries() {
 			return List.copyOf(queries);
+		}
+	}
+
+	private static final class ImagePlannerToolProvider implements PlannerToolProvider {
+		@Override
+		public String id() {
+			return "image";
+		}
+
+		@Override
+		public List<Map<String, Object>> openAiTools() {
+			return List.of(PlannerToolCatalog.toolForProvider(
+				"take_map_look",
+				"Read a map image.",
+				PlannerToolCatalog.propertiesForProvider(
+					PlannerToolCatalog.propForProvider("kind", PlannerToolCatalog.stringForProvider("Map image kind."))
+				),
+				List.of("kind")
+			));
+		}
+
+		@Override
+		public boolean handles(String toolName) {
+			return "take_map_look".equals(PlannerToolCatalog.normalizeName(toolName));
+		}
+
+		@Override
+		public CompletableFuture<String> execute(PlannerToolCall toolCall) {
+			return CompletableFuture.completedFuture("unused");
+		}
+
+		@Override
+		public CompletableFuture<PlannerProviderToolResult> executeResult(PlannerToolCall toolCall) {
+			return CompletableFuture.completedFuture(PlannerProviderToolResult.image(
+				"Tool result for take_map_look: provider=journeymap, kind=minimap, image attached.",
+				new LlmImageAttachment("image/png", new byte[]{1, 2, 3}, "low")
+			));
 		}
 	}
 
