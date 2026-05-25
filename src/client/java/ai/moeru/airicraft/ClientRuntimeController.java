@@ -227,6 +227,7 @@ public final class ClientRuntimeController {
 			payload.put("socialChatMaxDistanceBlocks", airicraftConfig.socialChatMaxDistanceBlocks());
 			payload.put("readSystemChatMessages", airicraftConfig.readSystemChatMessages());
 			payload.put("enableProactiveSocialMode", airicraftConfig.enableProactiveSocialMode());
+			payload.put("suppressAutoPauseOnFocusLost", airicraftConfig.suppressAutoPauseOnFocusLost());
 			return payload;
 		}
 
