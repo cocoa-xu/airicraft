@@ -8,6 +8,7 @@ import ai.moeru.airicraft.SingleplayerWorldService;
 import ai.moeru.airicraft.agent.behavior.BehaviorTreeRuntime;
 import ai.moeru.airicraft.agent.behavior.BehaviorTreeSnapshot;
 import ai.moeru.airicraft.agent.chat.ChatService;
+import ai.moeru.airicraft.agent.commonsense.CommonsenseConfig;
 import ai.moeru.airicraft.agent.debug.AgentDebugRecorder;
 import ai.moeru.airicraft.agent.debug.AgentDebugTimelineQueryResult;
 import ai.moeru.airicraft.agent.debug.ChatDebugSnapshot;
@@ -153,6 +154,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiFunction;
+import java.util.function.Consumer;
 
 public final class EmbodiedAgentRuntime {
 	static final long CHAT_ECHO_SUPPRESSION_TICKS = 40L;
@@ -183,6 +185,7 @@ public final class EmbodiedAgentRuntime {
 	private final CurrentViewVisionService visionService;
 	private final DialogueRuntime dialogueRuntime;
 	private final PlannerShellJournal plannerJournal;
+	private final Consumer<List<String>> commonsenseRulesUpdater;
 	private final WorldTaskExecutor worldTaskExecutor;
 	private final InventoryResourceCounter inventoryResourceCounter = new InventoryResourceCounter();
 	private final InventoryItemCounter inventoryItemCounter = new InventoryItemCounter();
@@ -228,6 +231,8 @@ public final class EmbodiedAgentRuntime {
 		this.visionService = plannerShell.visionService();
 		this.dialogueRuntime = plannerShell.dialogueRuntime();
 		this.plannerJournal = plannerShell.plannerJournal();
+		this.commonsenseRulesUpdater = plannerShell.commonsenseRulesUpdater();
+		this.commonsenseRulesUpdater.accept(CommonsenseConfig.defaults().effectiveRules());
 		this.debugRecorder.recordDialogueState(this.dialogueRuntime.snapshot());
 		registerDefaultScenarios();
 	}
@@ -286,6 +291,11 @@ public final class EmbodiedAgentRuntime {
 
 	public void updateIdleIdeasConfig(IdleIdeasConfig idleIdeasConfig) {
 		idleIdeaScheduler.updateConfig(idleIdeasConfig);
+	}
+
+	public void updateCommonsenseConfig(CommonsenseConfig commonsenseConfig) {
+		CommonsenseConfig effective = commonsenseConfig == null ? CommonsenseConfig.defaults() : commonsenseConfig;
+		commonsenseRulesUpdater.accept(effective.effectiveRules());
 	}
 
 	public Map<String, Object> observabilityDebugSnapshot() {
