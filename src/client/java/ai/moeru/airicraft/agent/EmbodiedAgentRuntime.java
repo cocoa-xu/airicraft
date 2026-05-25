@@ -42,6 +42,8 @@ import ai.moeru.airicraft.agent.goals.GoalMineSpec;
 import ai.moeru.airicraft.agent.goals.GoalPosition;
 import ai.moeru.airicraft.agent.goals.GoalSnapshot;
 import ai.moeru.airicraft.agent.goals.GoalType;
+import ai.moeru.airicraft.agent.idle.IdleIdeaScheduler;
+import ai.moeru.airicraft.agent.idle.IdleIdeasConfig;
 import ai.moeru.airicraft.agent.job.ActiveJob;
 import ai.moeru.airicraft.agent.job.ActiveJobProposal;
 import ai.moeru.airicraft.agent.job.ActiveJobType;
@@ -62,6 +64,7 @@ import ai.moeru.airicraft.agent.llm.PlannerOrchestrator;
 import ai.moeru.airicraft.agent.llm.PlannerResponse;
 import ai.moeru.airicraft.agent.llm.PlannerToolCall;
 import ai.moeru.airicraft.agent.llm.PlannerToolCatalog;
+import ai.moeru.airicraft.agent.llm.PlannerTrigger;
 import ai.moeru.airicraft.agent.llm.PlannerTriggerType;
 import ai.moeru.airicraft.agent.llm.VisionDescription;
 import ai.moeru.airicraft.agent.session.AutoLanOpenState;
@@ -173,6 +176,7 @@ public final class EmbodiedAgentRuntime {
 	private final NearbyPlayerTracker nearbyPlayerTracker;
 	private final PrimaryInteractionResolver primaryInteractionResolver = new PrimaryInteractionResolver(200L);
 	private final ActiveJobRuntime activeJobRuntime = new ActiveJobRuntime();
+	private final IdleIdeaScheduler idleIdeaScheduler;
 	private final FollowCapability followCapability = new FollowCapability();
 	private final BehaviorTreeRuntime behaviorTreeRuntime = new BehaviorTreeRuntime();
 	private final ChatService chatService = new ChatService();
@@ -210,6 +214,7 @@ public final class EmbodiedAgentRuntime {
 		this.worldTaskExecutor = Objects.requireNonNull(worldTaskExecutor, "worldTaskExecutor");
 		this.observability = Objects.requireNonNull(observability, "observability");
 		this.nearbyPlayerTracker = new NearbyPlayerTracker(resolveNearbyPlayerTrackingRadius(airicraftConfig));
+		this.idleIdeaScheduler = new IdleIdeaScheduler(IdleIdeasConfig.defaults());
 		Clock clock = Clock.systemDefaultZone();
 		PlannerShellComponents plannerShell = PlannerShellFactory.create(
 			config,
@@ -279,6 +284,10 @@ public final class EmbodiedAgentRuntime {
 		return config;
 	}
 
+	public void updateIdleIdeasConfig(IdleIdeasConfig idleIdeasConfig) {
+		idleIdeaScheduler.updateConfig(idleIdeasConfig);
+	}
+
 	public Map<String, Object> observabilityDebugSnapshot() {
 		Map<String, Object> snapshot = new LinkedHashMap<>();
 		snapshot.put("implementation", observability.getClass().getName());
@@ -320,6 +329,7 @@ public final class EmbodiedAgentRuntime {
 		dialogueRuntime.clear();
 		worldTaskExecutor.onWorldLeave();
 		activeJobRuntime.clear();
+		idleIdeaScheduler.reset();
 		followCapability.clear();
 		followState = FollowState.idle();
 		taskSnapshot = TaskSnapshot.idle();
@@ -384,6 +394,7 @@ public final class EmbodiedAgentRuntime {
 		recordSemanticTaskTransition(previousTaskSnapshot, taskSnapshot);
 		Optional<GoalSnapshot> activeGoal = activeGoal();
 		Optional<WorldTaskRequest> activeTaskRequest = activeJobRuntime.activeTaskRequest();
+		maybeFireIdleIdeaTrigger(activeGoal);
 
 		followState = followCapability.tick(
 			client,
@@ -1661,6 +1672,27 @@ public final class EmbodiedAgentRuntime {
 				plannerEventBuffer
 			);
 		}
+	}
+
+	private void maybeFireIdleIdeaTrigger(Optional<GoalSnapshot> activeGoal) {
+		if (!sessionSnapshot.companionActuationAllowed() || !config.llm().isConfigured()) {
+			idleIdeaScheduler.reset();
+			return;
+		}
+		boolean jobIdle = activeJobRuntime.current().isIdle();
+		long nowMs = System.currentTimeMillis();
+		idleIdeaScheduler.tick(jobIdle, tickCount, nowMs).ifPresent(trigger -> {
+			String primaryInteractionPlayer = primaryInteractionResolver.current().map(PrimaryInteractionPlayer::name).orElse(null);
+			dialogueRuntime.onPlannerTrigger(
+				trigger,
+				sessionSnapshot,
+				primaryInteractionPlayer,
+				activeGoal,
+				taskSnapshot,
+				missionExecutionSnapshot,
+				plannerEventBuffer
+			);
+		});
 	}
 
 	private ai.moeru.airicraft.agent.llm.PlannerTrigger createPlannerTrigger(SemanticEvent event, EventRoutingProfile profile) {
