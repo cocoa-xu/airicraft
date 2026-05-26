@@ -76,7 +76,8 @@ public final class AiricraftConfigLoader {
 		return new AiricraftConfig(
 			readInt(root, "socialChatMaxDistanceBlocks", defaults.socialChatMaxDistanceBlocks()),
 			readBoolean(root, "readSystemChatMessages", defaults.readSystemChatMessages(), strict),
-			readBoolean(root, "enableProactiveSocialMode", defaults.enableProactiveSocialMode(), strict)
+			readBoolean(root, "enableProactiveSocialMode", defaults.enableProactiveSocialMode(), strict),
+			readBoolean(root, "suppressAutoPauseOnFocusLost", defaults.suppressAutoPauseOnFocusLost(), strict)
 		);
 	}
 
@@ -97,6 +98,7 @@ public final class AiricraftConfigLoader {
 					"enableProactiveSocialMode",
 					readBoolean(agentRoot, "enableProactiveSocialMode", defaults.enableProactiveSocialMode(), false)
 				);
+				migratedData.put("suppressAutoPauseOnFocusLost", defaults.suppressAutoPauseOnFocusLost());
 			}
 			Files.writeString(configPath, dumpYaml(migratedData), StandardCharsets.UTF_8);
 			return;
