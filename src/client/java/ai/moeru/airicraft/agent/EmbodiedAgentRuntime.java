@@ -214,7 +214,7 @@ public final class EmbodiedAgentRuntime {
 		this.worldTaskExecutor = Objects.requireNonNull(worldTaskExecutor, "worldTaskExecutor");
 		this.observability = Objects.requireNonNull(observability, "observability");
 		this.nearbyPlayerTracker = new NearbyPlayerTracker(resolveNearbyPlayerTrackingRadius(airicraftConfig));
-		this.idleIdeaScheduler = new IdleIdeaScheduler(IdleIdeasConfig.defaults());
+		this.idleIdeaScheduler = new IdleIdeaScheduler(effectiveIdleIdeasConfig(IdleIdeasConfig.defaults()));
 		Clock clock = Clock.systemDefaultZone();
 		PlannerShellComponents plannerShell = PlannerShellFactory.create(
 			config,
@@ -285,7 +285,7 @@ public final class EmbodiedAgentRuntime {
 	}
 
 	public void updateIdleIdeasConfig(IdleIdeasConfig idleIdeasConfig) {
-		idleIdeaScheduler.updateConfig(idleIdeasConfig);
+		idleIdeaScheduler.updateConfig(effectiveIdleIdeasConfig(idleIdeasConfig));
 	}
 
 	public Map<String, Object> observabilityDebugSnapshot() {
@@ -1728,6 +1728,17 @@ public final class EmbodiedAgentRuntime {
 
 	static boolean isIdleForIdleIdeaScheduling(ActiveJob activeJob) {
 		return activeJob == null || activeJob.isIdle() || activeJob.status().terminal();
+	}
+
+	private IdleIdeasConfig effectiveIdleIdeasConfig(IdleIdeasConfig idleIdeasConfig) {
+		IdleIdeasConfig source = idleIdeasConfig == null ? IdleIdeasConfig.defaults() : idleIdeasConfig;
+		AgentConfig.IdleConfig idle = config.idle();
+		return new IdleIdeasConfig(
+			source.enabled() && idle.automaticEnabled(),
+			idle.initialDelaySeconds(),
+			idle.cooldownSeconds(),
+			source.ideas()
+		);
 	}
 
 	private ai.moeru.airicraft.agent.llm.PlannerTrigger createPlannerTrigger(SemanticEvent event, EventRoutingProfile profile) {

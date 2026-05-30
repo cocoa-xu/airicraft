@@ -3,15 +3,10 @@
 # a concrete next step on its own. Keep the idea list short and concrete; the
 # LLM uses it as inspiration and chains them itself.
 
-# Master switch for the idle thinker.
+# Master switch for the idle thinker. Timers live in agent.yml:
+# idleInitialDelaySeconds and idleCooldownSeconds. Set either timer to 0 to
+# disable automatic idle thoughts.
 enabled: true
-
-# Wait this many seconds after going idle before the first auto-thought.
-initialDelaySeconds: 30
-
-# After each auto-thought, wait at least this many seconds before another one,
-# regardless of outcome. This bounds LLM cost.
-cooldownSeconds: 90
 
 # Curated Minecraft survival progression ideas. Each entry should be one short
 # concrete sentence. Order is not important; the agent picks based on current

@@ -108,6 +108,15 @@ class IdleIdeaSchedulerTest {
 	}
 
 	@Test
+	void doesNotFireWhenEitherTimerIsZero() {
+		IdleIdeaScheduler noInitialDelay = new IdleIdeaScheduler(new IdleIdeasConfig(true, 0, 90, IDEAS));
+		IdleIdeaScheduler noCooldown = new IdleIdeaScheduler(new IdleIdeasConfig(true, 30, 0, IDEAS));
+
+		assertTrue(noInitialDelay.tick(true, 1L, BASE_MS + 1_000_000L).isEmpty());
+		assertTrue(noCooldown.tick(true, 1L, BASE_MS + 1_000_000L).isEmpty());
+	}
+
+	@Test
 	void doesNotFireWhenIdeasEmpty() {
 		IdleIdeaScheduler scheduler = new IdleIdeaScheduler(new IdleIdeasConfig(true, 30, 90, List.of()));
 

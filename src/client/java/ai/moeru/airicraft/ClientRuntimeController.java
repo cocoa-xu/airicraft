@@ -276,9 +276,9 @@ public final class ClientRuntimeController {
 
 		private Map<String, Object> idleIdeasPayload() {
 			LinkedHashMap<String, Object> payload = new LinkedHashMap<>();
-			payload.put("enabled", idleIdeasConfig.enabled());
-			payload.put("initialDelaySeconds", idleIdeasConfig.initialDelaySeconds());
-			payload.put("cooldownSeconds", idleIdeasConfig.cooldownSeconds());
+			payload.put("enabled", idleIdeasConfig.enabled() && agentConfig.idle().automaticEnabled());
+			payload.put("initialDelaySeconds", agentConfig.idle().initialDelaySeconds());
+			payload.put("cooldownSeconds", agentConfig.idle().cooldownSeconds());
 			payload.put("ideaCount", idleIdeasConfig.ideas().size());
 			return payload;
 		}

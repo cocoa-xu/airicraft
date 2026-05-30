@@ -30,7 +30,7 @@ public final class IdleIdeaScheduler {
 
 	public synchronized Optional<PlannerTrigger> tick(boolean activeJobIdle, long tickCount, long nowMs) {
 		IdleIdeasConfig current = config;
-		if (!current.enabled() || current.ideas().isEmpty()) {
+		if (!current.enabled() || current.initialDelaySeconds() <= 0 || current.cooldownSeconds() <= 0 || current.ideas().isEmpty()) {
 			idleStartTimestampMs = -1L;
 			return Optional.empty();
 		}
