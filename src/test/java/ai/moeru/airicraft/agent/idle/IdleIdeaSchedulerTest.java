@@ -53,6 +53,29 @@ class IdleIdeaSchedulerTest {
 	}
 
 	@Test
+	void fireNowBypassesDelayAndCooldown() {
+		IdleIdeaScheduler scheduler = new IdleIdeaScheduler(new IdleIdeasConfig(true, 30, 90, IDEAS));
+
+		Optional<PlannerTrigger> first = scheduler.fireNow(1L, BASE_MS);
+		Optional<PlannerTrigger> second = scheduler.fireNow(2L, BASE_MS + 1_000L);
+
+		assertTrue(first.isPresent());
+		assertTrue(second.isPresent());
+		assertEquals(PlannerTriggerType.IDLE_THINK, first.get().type());
+		assertEquals(2L, second.get().tick());
+	}
+
+	@Test
+	void fireNowBypassesEnabledSwitch() {
+		IdleIdeaScheduler scheduler = new IdleIdeaScheduler(new IdleIdeasConfig(false, 30, 90, IDEAS));
+
+		Optional<PlannerTrigger> trigger = scheduler.fireNow(1L, BASE_MS);
+
+		assertTrue(trigger.isPresent());
+		assertEquals(PlannerTriggerType.IDLE_THINK, trigger.get().type());
+	}
+
+	@Test
 	void resetsIdleTimerWhenJobBecomesActive() {
 		IdleIdeaScheduler scheduler = new IdleIdeaScheduler(new IdleIdeasConfig(true, 30, 90, IDEAS));
 

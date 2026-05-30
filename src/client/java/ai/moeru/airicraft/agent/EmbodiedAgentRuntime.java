@@ -725,6 +725,36 @@ public final class EmbodiedAgentRuntime {
 		return dialogueRuntime.pollDebugCompaction();
 	}
 
+	public Optional<PlannerTrigger> fireIdleIdeaTriggerManually() {
+		if (!config.llm().isConfigured()) {
+			throw new BridgeUnavailableException("planner_unavailable", "Planner LLM is not configured");
+		}
+		if (!sessionSnapshot.worldLoaded()) {
+			throw new BridgeUnavailableException("world_not_loaded", "No Minecraft world is currently loaded");
+		}
+		if (!sessionSnapshot.companionActuationAllowed()) {
+			throw new BridgeUnavailableException(
+				"companion_actuation_unavailable",
+				"Idle triggers require a LAN-hosted singleplayer or remote multiplayer session"
+			);
+		}
+		Optional<GoalSnapshot> activeGoal = activeGoal();
+		Optional<PlannerTrigger> trigger = idleIdeaScheduler.fireNow(tickCount, System.currentTimeMillis());
+		trigger.ifPresent(plannerTrigger -> {
+			String primaryInteractionPlayer = primaryInteractionResolver.current().map(PrimaryInteractionPlayer::name).orElse(null);
+			dialogueRuntime.onPlannerTrigger(
+				plannerTrigger,
+				sessionSnapshot,
+				primaryInteractionPlayer,
+				activeGoal,
+				taskSnapshot,
+				missionExecutionSnapshot,
+				plannerEventBuffer
+			);
+		});
+		return trigger;
+	}
+
 	public long lastChatTick() {
 		return chatService.lastChatTick();
 	}
@@ -1679,7 +1709,7 @@ public final class EmbodiedAgentRuntime {
 			idleIdeaScheduler.reset();
 			return;
 		}
-		boolean jobIdle = activeJobRuntime.current().isIdle();
+		boolean jobIdle = isIdleForIdleIdeaScheduling(activeJobRuntime.current());
 		long nowMs = System.currentTimeMillis();
 		idleIdeaScheduler.tick(jobIdle, tickCount, nowMs).ifPresent(trigger -> {
 			String primaryInteractionPlayer = primaryInteractionResolver.current().map(PrimaryInteractionPlayer::name).orElse(null);
@@ -1693,6 +1723,10 @@ public final class EmbodiedAgentRuntime {
 				plannerEventBuffer
 			);
 		});
+	}
+
+	static boolean isIdleForIdleIdeaScheduling(ActiveJob activeJob) {
+		return activeJob == null || activeJob.isIdle() || activeJob.status().terminal();
 	}
 
 	private ai.moeru.airicraft.agent.llm.PlannerTrigger createPlannerTrigger(SemanticEvent event, EventRoutingProfile profile) {

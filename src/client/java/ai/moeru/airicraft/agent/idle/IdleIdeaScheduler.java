@@ -49,6 +49,18 @@ public final class IdleIdeaScheduler {
 		return Optional.of(buildTrigger(current.ideas(), tickCount, nowMs));
 	}
 
+	public synchronized Optional<PlannerTrigger> fireNow(long tickCount, long nowMs) {
+		IdleIdeasConfig current = config;
+		if (current.ideas().isEmpty()) {
+			return Optional.empty();
+		}
+		if (idleStartTimestampMs < 0L) {
+			idleStartTimestampMs = nowMs;
+		}
+		lastFireTimestampMs = nowMs;
+		return Optional.of(buildTrigger(current.ideas(), tickCount, nowMs));
+	}
+
 	private static PlannerTrigger buildTrigger(List<String> ideas, long tickCount, long nowMs) {
 		StringBuilder builder = new StringBuilder(512);
 		builder.append("IDLE THINK: You currently have no active task and no recent player input. ")
