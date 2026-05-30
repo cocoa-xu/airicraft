@@ -86,6 +86,20 @@ class IdleIdeaSchedulerTest {
 	}
 
 	@Test
+	void recordActivityRestartsIdleDelayWithoutClearingCooldown() {
+		IdleIdeaScheduler scheduler = new IdleIdeaScheduler(new IdleIdeasConfig(true, 30, 90, IDEAS));
+
+		scheduler.tick(true, 1L, BASE_MS);
+		assertTrue(scheduler.tick(true, 2L, BASE_MS + 30_000L).isPresent());
+
+		scheduler.recordActivity();
+
+		assertTrue(scheduler.tick(true, 3L, BASE_MS + 120_000L).isEmpty());
+		assertTrue(scheduler.tick(true, 4L, BASE_MS + 149_999L).isEmpty());
+		assertTrue(scheduler.tick(true, 5L, BASE_MS + 150_000L).isPresent());
+	}
+
+	@Test
 	void doesNotFireWhenDisabled() {
 		IdleIdeaScheduler scheduler = new IdleIdeaScheduler(new IdleIdeasConfig(false, 30, 90, IDEAS));
 

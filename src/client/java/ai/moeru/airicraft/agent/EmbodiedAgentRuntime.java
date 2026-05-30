@@ -1689,6 +1689,7 @@ public final class EmbodiedAgentRuntime {
 		if (triggers.isEmpty()) {
 			return;
 		}
+		idleIdeaScheduler.recordActivity();
 		String primaryInteractionPlayer = primaryInteractionResolver.current().map(PrimaryInteractionPlayer::name).orElse(null);
 		Optional<GoalSnapshot> activeGoal = activeGoal();
 		for (ai.moeru.airicraft.agent.llm.PlannerTrigger trigger : triggers) {

@@ -24,6 +24,10 @@ public final class IdleIdeaScheduler {
 		lastFireTimestampMs = -1L;
 	}
 
+	public synchronized void recordActivity() {
+		idleStartTimestampMs = -1L;
+	}
+
 	public synchronized Optional<PlannerTrigger> tick(boolean activeJobIdle, long tickCount, long nowMs) {
 		IdleIdeasConfig current = config;
 		if (!current.enabled() || current.ideas().isEmpty()) {
